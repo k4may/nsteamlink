@@ -22,6 +22,8 @@ tools/switch-debugctl.py 10.10.10.17 diag prev
 | `audio` | 实际采样率／声道、队列字节数、解码帧数、丢弃及错误计数 |
 | `hid` | 提交／发送／确认计数、待发与在途数、重试次数、最大 ACK 等待 |
 | `hidlog` / `hid-history` | 有界的 SDL／原始输入及已提交报告历史 |
+| `haptics`（Switch） | 普通/原生震动命令、解码/提交样本、延迟、拒绝/丢失、IPC 及源队列计数 |
+| `haptic-trace <serial>`（Switch） | serial 之后最多六条原包/输出记录；只读分页，无记录返回 `{}` |
 | `diag current` | 当前诊断日志的内存尾部，最多 3500 字节 |
 | `diag prev` | 上次启动日志的缓存尾部，最多 3500 字节 |
 
@@ -29,6 +31,23 @@ tools/switch-debugctl.py 10.10.10.17 diag prev
 手动地址位于选项 → 设置 → 手动地址。图形、IHS 初始化及发现不再由调试命令分步驱动。
 独立 `switch-discover` 工具的 `hosts/select/pair/code/exit` 等命令属于其工具接口，
 不适用于正式应用。
+
+震动 trace 包含原始 `0x01/0x0d` 命令、接收/到期/提交/完成单调时间以及两侧
+low/high 幅频参数。环形缓冲上限 512，覆盖递增计数；序号缺口不能当成连续完整
+保真记录。`commands` 等应用计数从应用初始化累计，`source_*` 计数只统计当前
+会话仍打开的 SDL 设备；关闭设备后不能用它恢复已关闭设备的历史。
+诊断查询只复制内存，不在输出或渲染线程打印或写文件。
+
+```sh
+tools/switch-debugctl.py 10.10.10.17 haptics
+tools/switch-debugctl.py 10.10.10.17 haptic-trace 0
+python3 tools/capture-switch-haptics.py --seconds 30 --output build/game-haptics.jsonl
+```
+
+采集器只读取已运行的诊断应用；不启动串流或制造震动。单次运行内按 serial
+去重并记录缺口，跨应用重启应另开采集文件。`native_commands=0` 仅表示客户端
+尚未收到原生命令，不能据此认定手柄不支持 HD。包/IPC 记录均不证明实际马达
+频谱；分层验证、自动部署夹具及物理测量边界见 `OFFICIAL_INPUT_RE.md` §22。
 
 ## 自包含真实主机会话测试
 

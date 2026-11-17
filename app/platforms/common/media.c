@@ -275,6 +275,9 @@ static const IHS_HIDProviderSDLDeviceList HID_DEVICE_LIST = {
     .index = hid_device_list_index,
     .instanceId = hid_device_list_instance_id,
     .controller = hid_device_list_controller,
+#ifdef __SWITCH__
+    .output = sl_rumble_command,
+#endif
 };
 
 static const char *SWITCH_FACE_LABEL_MAPPING =
@@ -948,6 +951,8 @@ bool stream_media_init(stream_media_log_fn log_fn) {
         return false;
     }
     sdl_initialized = true;
+    if (!sl_rumble_init())
+        media_logf("native vibration initialization failed");
     sl_events_init();
 
     sl_gfx_config graphics = {.width = SDL_WIDTH, .height = SDL_HEIGHT, .title = "nsteamlink"};
@@ -981,6 +986,9 @@ void stream_media_shutdown(void) {
     sl_media_capture_guide(false);
     sl_events_shutdown();
     stream_media_set_hid_session(NULL, false);
+    sl_rumble_tick(false);
+    media_logf("media shutdown: vibration stop/join");
+    sl_rumble_shutdown();
     sl_sensors_stop();
     stream_media_video_stop(NULL);
     audio_shutting_down = true;

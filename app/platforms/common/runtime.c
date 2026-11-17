@@ -14,6 +14,7 @@
 #include "endianness.h"
 #include "remote_wire.h"
 #include "session/session_pri.h"
+#include "platform/rumble.h"
 #endif
 #include "host_directory.h"
 #if NSL_HAVE_SNS
@@ -2483,6 +2484,77 @@ static void udp_poll(sl_runtime *r) {
                  (unsigned long long)s->hidAcknowledged, s->hidPending, s->hidInFlight,
                  (unsigned long long)s->reliableRetries,
                  (unsigned long long)s->reliableMaxAckLatencyMs);
+#ifdef __SWITCH__
+    } else if (!strcmp(cmd, "haptics")) {
+        sl_rumble_snapshot s;
+        sl_rumble_get_snapshot(&s);
+        sl_haptic_stats total = {0};
+        for (unsigned i = 0; i < 8; ++i) {
+            total.commands += s.stream[i].commands;
+            total.native_commands += s.stream[i].native_commands;
+            total.decoded_samples += s.stream[i].decoded_samples;
+            total.emitted_samples += s.stream[i].emitted_samples;
+            total.rejected += s.stream[i].rejected;
+            total.overflows += s.stream[i].overflows;
+            total.dropped_samples += s.stream[i].dropped_samples;
+            total.late_samples += s.stream[i].late_samples;
+            if (s.stream[i].max_lateness_ns > total.max_lateness_ns)
+                total.max_lateness_ns = s.stream[i].max_lateness_ns;
+        }
+        IHS_HIDSDLOutputStats q = {0};
+        if (r->session)
+            IHS_HIDSDLGetOutputStats(r->session, &q);
+        snprintf(reply, sizeof(reply),
+            "{\"stage\":\"haptics\",\"commands\":%llu,\"native_commands\":%llu,"
+            "\"decoded_samples\":%llu,\"emitted_samples\":%llu,\"rejected\":%llu,"
+            "\"overflows\":%llu,\"dropped_samples\":%llu,\"late_samples\":%llu,"
+            "\"max_lateness_ns\":%llu,\"sends\":%llu,\"send_failures\":%llu,"
+            "\"stop_failures\":%llu,\"trace_overwritten\":%llu,\"io_rc\":%u,"
+            "\"source_queued\":%llu,\"source_applied\":%llu,\"source_rejected\":%llu,"
+            "\"source_dropped\":%llu,\"source_pending_bytes\":%llu}",
+            (unsigned long long)total.commands, (unsigned long long)total.native_commands,
+            (unsigned long long)total.decoded_samples, (unsigned long long)total.emitted_samples,
+            (unsigned long long)total.rejected, (unsigned long long)total.overflows,
+            (unsigned long long)total.dropped_samples, (unsigned long long)total.late_samples,
+            (unsigned long long)total.max_lateness_ns, (unsigned long long)s.sends,
+            (unsigned long long)s.send_failures, (unsigned long long)s.stop_failures,
+            (unsigned long long)s.trace_overwritten, s.io_result,
+            (unsigned long long)q.queued, (unsigned long long)q.applied,
+            (unsigned long long)q.rejected, (unsigned long long)q.queueDropped,
+            (unsigned long long)q.pendingBytes);
+    } else if (!strncmp(cmd, "haptic-trace ", 13)) {
+        char *end;
+        uint64_t after = strtoull(cmd + 13, &end, 10);
+        if (end == cmd + 13 || *end) {
+            strcpy(reply, "ERR haptic-trace requires a record serial");
+        } else {
+            sl_rumble_trace entries[6];
+            size_t count = sl_rumble_read_trace(after, entries, 6), used = 0;
+            for (size_t i = 0; i < count; ++i) {
+                sl_rumble_trace *t = &entries[i];
+                char wire[139] = {0};
+                for (unsigned j = 0; j < t->size; ++j)
+                    snprintf(wire + j * 2, 3, "%02x", t->command[j]);
+                int n = snprintf(reply + used, sizeof(reply) - used,
+                    "{\"serial\":%llu,\"kind\":%u,\"slot\":%u,\"seq\":%llu,\"sample\":%u,"
+                    "\"received_ns\":%llu,\"due_ns\":%llu,\"sent_ns\":%llu,\"completed_ns\":%llu,"
+                    "\"rc\":%u,\"wire\":\"%s\",\"values\":[[%.9g,%.9g,%.9g,%.9g],[%.9g,%.9g,%.9g,%.9g]]}\n",
+                    (unsigned long long)t->serial, t->kind, t->slot,
+                    (unsigned long long)t->sequence, t->sample,
+                    (unsigned long long)t->received_ns, (unsigned long long)t->due_ns,
+                    (unsigned long long)t->submitted_ns, (unsigned long long)t->completed_ns,
+                    t->result, wire, t->values[0].amp_low, t->values[0].freq_low,
+                    t->values[0].amp_high, t->values[0].freq_high,
+                    t->values[1].amp_low, t->values[1].freq_low,
+                    t->values[1].amp_high, t->values[1].freq_high);
+                if (n < 0 || (size_t)n >= sizeof(reply) - used)
+                    break;
+                used += (size_t)n;
+            }
+            if (!used)
+                strcpy(reply, "{}");
+        }
+#endif
     } else if (!strncmp(cmd, "diag", 4)) {
         if (!sl_log_copy_tail(reply, sizeof(reply), strstr(cmd, "prev") != NULL))
             strcpy(reply, "ERR diagnostic log unavailable or busy");

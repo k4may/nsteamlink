@@ -3543,3 +3543,24 @@ Decision：
 4. 不新增线程、同步网络日志或 loader 流程；沿用设备锁与既有 flush/delta 通路。
 5. 协议更改保留固定二进制执行反例。离线分段验证不替代实机 action/指针输出，
    也不推断历史输入失效根因或 hbmenu 生命周期安全。
+
+## D-A107：Steam 原生震动效果与 Switch 参数输出
+
+Evidence：`OFFICIAL_INPUT_RE.md` §22 固定 Steam 主机/官方 receiver 原指令
+证明 Generic SDL 协议同时支持普通 `0x01` 与 69B `0x0d`。真实 Nintendo
+短脉冲含三个压缩样本，只解首样本会完全静音。libnx IPC 206 支持每个 actuator
+两频带独立幅频值；IPC 202 读回仅为系统参数证据。
+
+Decision：
+
+1. ihslib 原样保留效果包和单调接收时间，由 SDL owner 的可选原生回调分流；
+   接收线程不进入 SDL/HID。其他平台仍走 SDL SendEffect。
+2. 独立实现有状态解码和 5ms 逐样本播放，不将原生包压缩为双强度，不加入
+   增强、尾音或平滑。调度超时、拒绝、队列丢失及 trace 覆盖全部显式记账。
+3. 使用 joinable 输出 worker 与独立 `hid` service session，避免与 SDL 的全局
+   HID session 共享跨线程 IPC；设备定位/激活仍在 SDL owner。worker 无网络日志。
+4. 改绑先零输出旧设备；退出 stop → join → close，随后才能关闭 SDL/IHS/socket。
+   失败保持错误证据，不以正常函数返回宣称物理停止或 hbmenu 返回。
+5. 固定 GPL-2.0-only 参考解码器只在测试工具的独立进程运行，不分发或链接进
+   GPLv3 生产代码。软件参数、时序、系统读回、机械响应分别验收；自包含 NRO
+   自动收集，不要求人工复制 SD fixture 或观察震动来代替量化验证。

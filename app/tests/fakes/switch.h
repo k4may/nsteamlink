@@ -3,6 +3,7 @@
 typedef uint32_t u32;
 typedef uint32_t Result;
 #define R_FAILED(r) ((r) != 0)
+#define R_SUCCEEDED(r) ((r) == 0)
 typedef enum { HidNpadIdType_No1 = 0, HidNpadIdType_Handheld = 0x20 } HidNpadIdType;
 typedef enum {
     HidNpadStyleTag_NpadFullKey = 1,

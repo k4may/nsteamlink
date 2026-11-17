@@ -23,6 +23,7 @@ MARKERS = (
     b"cloud_try stage=", b"cloud_dns event=", b"dns_query event=", b"https_route event=", b"end_game_status source=", b"update_notice ",
     b"control_tx phase=", b"control_rx phase=", b"control_identity account_present=",
     b"hid_transport phase=", b"hid_capture phase=",
+    b"haptic-trace ", b'"stage":"haptics"', b'"source_pending_bytes":',
     b"--capture-guide-selftest", b"--system-buttons-selftest",
     b'"capture_route":', b'"test":"capture_guide"', b'"test":"system_buttons"',
     b"sns_config event=", b"sns_start failed_stage=",

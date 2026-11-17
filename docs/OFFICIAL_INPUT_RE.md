@@ -1182,3 +1182,245 @@ source Update，可通过该门槛，并在 `0x138670570..0x138670582` 把普通
 
 **Boundary：** 游戏内映射、不同游戏兼容性、各手柄形态和校准精度没有由此次
 反馈得到验证；也未据此认定旧实验按键失效的根因或 hbmenu 返回状态。
+
+## 22. 震动输出：普通 rumble 与原生效果包（2026-11-17）
+
+### 22.1 证据更正与材料
+
+**Retraction：** 撤回本轮初步调研把“ihslib 当前 SDL 后端只解析双路 rumble”
+外推为“Steam Remote Play / Generic 链路最多只能传双路强度”的结论。
+`DeviceWrite.data` 是 bytes；官方 SDL 设备协议还包含 `0x0d` 专有效果命令。
+这项更正不撤回 D-048 对现有 `0x01` 强度单位、libnx 振幅范围以及固定频率
+实现的说明，也不把新发现归因为用户所说“傻震”的已证实原因。
+
+**Evidence：**
+
+- Windows Steam 主机使用 §20.1 的固定 `steamclient64.dll`，SHA-256
+  `e9045710ec7ee47d7b7488d1c5dda2d933dec7e251e965967a5c48f4df68eb4e`。
+- Android 1.3.32 的 `libmain.so`，SHA-256
+  `50e1d3147d5d47b71ef1970e1867a2fe4f3e1ecf2ea6153f927fac88b88ea38e`。
+  `CHIDDeviceSDLGamepad::Write @0x7527b4` 的 69B 分支检查 byte 0 为 13，
+  从 `+1` 读 u32 长度，从 `+5` 取数据，调用 `SDL_SendGamepadEffect`。
+  该动态函数名在 `0x3b1d3e`，初始化绑定位置 `0x756b6c..0x756b9c`。
+- 另从 Valve 下载
+  [Linux Steam Link 1.4.5.326](https://repo.steampowered.com/steamlink/1.4.5.326/steamlink-1.4.5.326.tgz)，
+  归档 SHA-256 `52b8136ca6b9fd03e711519c36acd7ee79ca01d8c0f397eaddb13146848720a3`；
+  `package/bin/steamlink` SHA-256
+  `92373306ed2c91818bb5dc89d2cd7ba18cc8244f9d436de671c35d776d0425ac`。
+  同类 Write 入口 `0x2dbc30`，效果分支 `0x2dbcc8..0x2dbce9`，最终调用
+  `SDL_SendGamepadEffect`，函数槽 `0x1441a48`。
+
+普通 `0x01` 与专用 `0x0d` 是同一 Generic SDL 设备的两类输出，不需要因为
+发现 `0x0d` 就移除 `is_generic_gamepad`。§17 的输入格式约束仍适用。
+
+### 22.2 固定主机的实际输出粒度
+
+**Evidence：** `CGenericGamepadControllerAbstraction` vtable `0x1392ea3d0`：
+
+| 路径 | 原始代码地址 | 实际输出 |
+|---|---|---|
+| 普通 rumble，slot 33 | `0x13867bda0..0x13867be8d` | 21B：`01 + u16 low + u16 high + u32 duration_ms + padding`；此分支 duration 为 5000ms |
+| 扳机 rumble，slot 34 | `0x13867c920..0x13867c9d1` | 21B `0x06` 命令；不是 Switch 身体震动器增加两个物理马达 |
+| Switch 脉冲，slot 32 | `0x13867cce0..0x13867ce98` | 类型 38/51 等检查后输出 69B `0x0d`，内嵌 10B Nintendo `0x10` 报告 |
+| PS5 类效果，slot 23 | `0x13867b770..0x13867b89e` | 类型 45/48 门禁，内嵌 47B 效果；不能当成任意 Switch 波形入口 |
+
+`CPulseHapticWorkItem` 的执行路径 `0x138617a90..0x138617b60` 调用 abstraction
+vtable `+0x100`，即 slot 32。不能只根据 Steamworks 公共 API 的设备名单，排除
+Steam 内部这条 Switch 路径；同样，内部实现存在也不证明某个游戏会调用它。
+
+普通 rumble 的非零更新比较 `Plat_TickDiffMilliSec(...) < 0x32`，即 50ms；
+零强度停止绕过这个检查。相同值还受刷新时间判断影响，不是每帧必发。
+Switch 脉冲另有每目标 50ms 门禁，且普通 rumble 非零时存在 500ms 的冲突检查。
+时钟单位由 PE 导入名 `Plat_TickDiffMilliSec` 确认，不能由常数 50 猜测单位。
+这些是固定 DLL 特定分支的行为，不是所有 Steam 版本或所有设备的统一频率上限。
+
+**Evidence / 离线执行：** `tools/steam-rumble-host-audit.py` 执行上述普通与
+Switch 脉冲原始指令，并经过原始 `CGenericControllerProtocolHandler` 转发
+`0x13867f7f0`，记录最终 HID Write 参数。普通示例得到：
+
+```
+01 34 12 cd ab 88 13 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+```
+
+即两路强度 `0x1234/0xabcd`、5000ms。49ms 不发，50ms 发；零强度可在 0ms 发。
+
+Switch 脉冲的容器为：
+
+```
+0d 0a 00 00 00 [10B Nintendo report] [54B zero padding]
+```
+
+两个目标与关闭的 10B 报告分别为：
+
+```
+target 0: 10 00 00 01 40 40 00 00 05 c0
+target 1: 10 00 00 00 05 c0 00 01 40 40
+off:      10 00 00 01 40 40 00 01 40 40
+```
+
+这里的 target 是原始函数参数值，不在未经过 worker 侧目标变换时直接标为物理左右。
+将脉冲 duration 改为 1、1000、65535，并改变间隔和重复次数，得到相同报告。
+原始 Switch 分支只用 duration 的零/非零选择固定脉冲/关闭，不编码这些完整参数。
+
+脚本还把产生的命令分别交给固定 Windows SDL Write 和 Linux 1.4.5.326 Write
+原始指令执行：普通命令到达 rumble 调用；`0x0d` 的 10B 数据逐字节原样到达
+effect 调用。独立的合成 64B payload 用例仅证明两个 receiver 可以无损转交
+64B，不证明 Steam 会为 Switch 生成这种数据。
+
+**Conclusion：** 已证明该主机至少有“双路强度”和“Nintendo 原生压缩短脉冲”
+两条输出。`0x0d` 是设备专用数据容器；它的存在不等于普通 PC 游戏提供任意
+HD 波形，固定 Switch 脉冲分支反而有明确的信息降级。
+
+### 22.3 修复前的客户端缺口与原生 API 边界
+
+**Evidence（修复前，父仓库 `198da0c` 记录的 ihslib）：**
+`third_party/ihslib/src/hid/sdl/src/sdl_hid_write.c` 的
+`WriteCommandLength` 只接受 `01/05/06/08/09/0a/0b`，不接受 `0d`。
+`IHS_HIDDeviceSDLWrite` 在这里对未知命令返回 -1，专有效果不会进入硬件输出。
+这是静态解析缺口，不是当前用户游戏已经发送 `0d` 的抓包证据。
+
+`app/platforms/switch/rumble.c` 已经直接调用 libnx `hidSendVibrationValues`，
+所以现有普通输出最后一层并没有经过 devkitPro SDL 震动驱动。只替换
+`SDL_GameControllerRumble`，不能补上它之前拒收的 `0d` 数据。
+
+[SDL 的 Switch HIDAPI 后端](https://github.com/libsdl-org/SDL/blob/68ef6231c08d2336b7f75a58dbb59efbf75349d3/src/joystick/hidapi/SDL_hidapi_switch.c)
+的 `HIDAPI_DriverSwitch_SendJoystickEffect` 接受 10B、report ID 为 `0x10` 的
+完整输出包，保留两组原生 motor data 后调用 `WriteRumble`。因此“SDL 整体
+没有设备专有效果能力”也不成立；应区分通用 rumble API、SendEffect API 与
+Switch 平台 backend 的具体实现。
+
+libnx 的 `HidVibrationValue` 为每个 actuator 提供两组频率/振幅，
+`hidSendVibrationValues` 直接转交 `hid` IPC 206；不是把参数变成双路强度。
+`hidGetActualVibrationValue` 是 IPC 202 参数读回，不能据其名字把它当成电机
+物理加速度测量或全部短样本的执行证明。
+
+更低层还存在 `btdrvWriteHidData` / `btdrvWriteHidData2` 原始 Bluetooth Output
+报告接口。但其存在不能证明 NRO 可与 HOS 的同一手柄输出稳定共存，也不能覆盖
+掌机轨道连接。系统输出竞争、报告计数器、设备定位和连接方式都需要独立证据。
+未证明普通 libnx 调度无法复现目标效果前，不能把“接管蓝牙”视为必需条件。
+
+### 22.4 压缩样本、保真目标与验证边界
+
+**Evidence：** 使用 MissionControl commit
+`71a837fcff422a652bd1326a214f925792ae8449` 的
+[decoder](https://github.com/ndeadly/MissionControl/blob/71a837fcff422a652bd1326a214f925792ae8449/mc_mitm/source/controllers/switch_hd_rumble_decoder.cpp)
+与 types，在桌面编译原代码（仅补 Stratosphere 的类型、宏与标准库头），按
+`40400100 -> c0050000 -> 40400100` 输入，得到：
+
+| motor word | 样本数 | low amp / low Hz / high amp / high Hz |
+|---|---|---|
+| `40400100` | 1 | `0 / 160 / 0 / 320` |
+| `c0050000` | 3 | `0 / 160 / 0 / 320` → `0.0441942 / 160 / 0 / 320` → `0 / 160 / 0 / 320` |
+| `40400100` | 1 | `0 / 160 / 0 / 320` |
+
+这说明四字节 motor data 不能一概当作一组静态频率/振幅；它还可能包含多个
+有状态的压缩样本。只取第一个样本会把这里整个脉冲变成静音。
+MissionControl 的 `switch_vibration_processor.cpp` 明确只取首样本，这是它向
+其他硬件转换时的取舍，不能照搬为本项目“HD 保真”的正确性依据。
+
+**Conclusion / 设计边界：** 完整保真输出层应在通用 rumble 与原生效果之间
+保留区别：普通命令保留原始强度和时序，按可复核的参考驱动映射；原生命令
+保留完整样本序列、每侧解码状态、停止/替换关系及时间顺序，再交给原生输出。
+不应先把原生包降级成双路强度，也不应为宣称“更 HD”而给真实原始效果添加
+未经参考验证的频率、尾音或平滑。软件层应记录原始命令、解码结果和实际提交
+时间，以便定位是哪一层丢了信息。
+
+**Boundary：** 离线脚本使用合成 controller 对象、设备 eligibility、时钟、锁与
+最终 HID/SDL 记录终端；执行的是原始 producer、protocol forwarder 和 receiver。
+没有执行完整 Steam Input API 调用、真实 RemoteHID 网络、Switch IPC 或电机。
+MissionControl 解码结果是独立实现对照，也不是 HOS/控制器固件的时间执行证明。
+不能从这些结果宣称用户游戏必发原生包、实际样本间距已确认、HD 输出已完成，
+也不能推断 Switch 的 hbmenu/loader 生命周期。
+
+“准确”的验收对象应明确为同一输入下参考 Steam/控制器驱动的输出，而不是
+主观觉得更强。包级比较验证参数、顺序和丢失；设备 IPC 读回验证系统接受的值；
+对同一手柄的直接连接与串流重放进行相同条件的加速度频谱/时间包络测量，才能
+进一步评估物理频率、能量和脉冲宽度。手柄自带 IMU 的采样带宽不应默认足以
+测量最高频震动；传感器带宽、采样率和安装方式需要说明。
+
+复现（两份固定官方二进制均由操作者自行提供，不随仓库分发）：
+
+```sh
+python3 tools/steam-rumble-host-audit.py \
+  --host /path/to/steamclient64.dll \
+  --linux-client /path/to/steamlink \
+  --output /tmp/steam-rumble-host-audit.json
+```
+
+### 22.5 原生接收、解码与输出契约
+
+`sdl_hid_write.c` 接受完整 69B `0x0d`，检查内嵌长度不超过 64，复制命令与
+单调接收时间后入有界队列。SDL owner drain 将原始效果交给 provider 的可选
+`output` 回调；未提供回调的平台仍走 SDL SendEffect。Switch 回调拒绝未知
+设备报告，不把它转成普通 rumble。原有输入报告格式及手柄身份保持协议约束。
+接收、应用、拒绝与队列丢失均有独立计数；移除每次成功 DeviceWrite 的日志，
+避免反向输出制造会话日志背压。
+
+`hd_rumble.c` 用显式掩码和整数对数坐标实现七种压缩格式，包括两侧独立状态、
+0–3 个样本、绝对及相对频率/振幅。其输出不是两路强度，而是每个 actuator
+的 low/high 两组频率和振幅。普通 `0x01` 继续使用原有线性强度、160/320Hz
+映射；这里没有声称它逐位复现 PC SDL 的原始 Nintendo 编码器或物理感受。
+
+**Evidence / 时间参考：** RenHDrum 的
+[5ms 多采样研究](https://github.com/trzz1214/RenHDrum/blob/f5223f63993cb317d24e3c9fd91619b8f527e7fd/docs/research/02-amfm-multisample-and-crisp-notes.md)
+描述 15ms 报告中的三个 5ms slot，并公开了原生编码频率的独立声学实验。
+本项目据此选用 5ms 软件播放间隔；没有采用其 attack boost、sustain decay
+或其他增强处理。该资料是外部研究证据，不是本项目 HOS IPC 或马达的实测。
+
+`haptic_stream.c` 保留每包全部样本和接收时间间隔，按单调绝对期限调度。
+输出过晚时延后后续样本并记账，禁止把多个过期样本瞬间发完或只取首样本。
+96 帧队列溢出明确报错并统计丢样；已经收到的有效压缩状态仍推进，避免后续
+相对编码永久漂移。接收队列本身丢包时无法补造源状态，必须按计数判为保真失败。
+普通命令显式替换待播原生序列，普通持续时间到期发零；原生最后值维持到下一
+命令或会话停止，不添加尾音。断线、会话停止和设备形态切换清空待播帧。
+
+`switch/rumble.c` 在 SDL owner 上定位和激活设备，输出 worker 只持有复制的
+原生 handles 和参数，通过自己打开的 `hid` service 发送 IPC 206；不进入 SDL、
+全局 libnx HID session 或日志回调。每次成功提交完成后，下一帧至少间隔 5ms，
+IPC 等待造成的额外时差保留在 trace。设备切换先向旧 binding 发零，失败重试；
+退出按 stop → join → close 顺序，停止失败单独计数，不能解释为已停止。
+
+诊断构建保留有界 512 条命令/提交记录和递增 serial，覆盖即计数。应用的只读
+`haptics` / `haptic-trace <serial>` 可观察真实游戏是否发送 `0x0d`；不需要在
+渲染线程逐包打印。采集工具见 `tools/capture-switch-haptics.py`。
+
+### 22.6 分层验证及判定边界
+
+| 验证 | 证据入口 | 能证明什么 |
+|---|---|---|
+| 官方 producer / receiver | `steam-rumble-host-audit.py`，固定官方二进制原指令 | 特定主机实际生成的包和接收端转交内容 |
+| 独立解码对照 | `check-switch-haptics.py` | 固定输入序列的样本数、顺序、两频带参数；不含时间与硬件 |
+| 实际接收链路 | CTest `hid_sdl_output` / `nsl-haptic-pipeline` | 真正 DeviceWrite、复制队列、owner drain、生产解码/线程；最后 HID 为 mock |
+| 真机自包含夹具 | `switch-haptics-probe.py` + `nsl-haptics-probe.nro` | 实际 IPC 提交、系统参数读回、软件时间、零输出及 worker join |
+| 实际马达 | 同一手柄的原生直连与串流重放，加外部带宽充分的传感器 | 频谱、时间包络、能量、脉冲宽度的物理差异 |
+
+独立解码器固定在 MissionControl `71a837fc…8449`，脚本核验三个源文件的 Git
+blob hash，只在忽略的 build 目录构建独立参考进程。其 GPL-2.0-only 代码不
+复制或链接进本项目；生产实现按协议事实独立编写。对照包含全部 16,384 组
+7bit 绝对幅频组合、全部 32 种短命令及固定种子的有状态随机序列；固定语料
+共 82,184 words / 139,972 samples。该语料不能等价于穷举所有状态。
+
+真机夹具从实际 IHS DeviceWrite 入口注入两侧各六次官方短脉冲，再注入两频带
+80/640Hz 的绝对值和普通停止。刺激全部编译进 NRO，不需 SD fixture 或 Steam
+主机。活动期间将提交与读回存入内存，worker join 后才批量发送高频诊断。
+读回同时记录调用前后时间；跨越下一次提交的读回不能算某一短样本的证明。
+主机分析器使用独立参考进程重新解码原包；缺命令、丢样、错序、参数错误、
+停止/清理失败均拒绝软件通过；样本间隔误差超过 500µs 或读回不全另外失败。
+500µs 是验证工具的观察阈值，不是控制器规范，也不改变生产调度。
+负向对照专门检查这些失败条件，缺日志不能变成通过。
+
+```sh
+cmake --build build/desktop --target nsl-hd-rumble-oracle
+python3 tools/check-switch-haptics.py \
+  --oracle build/desktop/app/nsl-hd-rumble-oracle
+cmake --build build/switch --target nsl-haptics-probe_nro
+# 仅在用户已准备好 hbmenu netloader 时运行一次；不做 TCP 端口探测。
+python3 tools/switch-haptics-probe.py --nro build/switch/app/nsl-haptics-probe.nro
+# 已有日志可以独立重验，不部署设备。
+python3 tools/switch-haptics-probe.py --log build/haptics-device.log
+```
+
+**Boundary：** 上述工具从不将 nxlink 返回、worker join 或 IPC 参数读回写成
+`physical_fidelity_verified=true` 或 `loader_return_verified=true`。验证设施和
+可交叉编译的输出实现不等于已完成真机验收；某个游戏是否发原生包必须看该会话
+的实际 trace。任务验收及尚缺实测只记录在 GitHub Issue，不在参考文档维护进度。
