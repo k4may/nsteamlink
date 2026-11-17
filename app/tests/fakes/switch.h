@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
 typedef uint32_t u32;
 typedef uint32_t Result;
 #define R_FAILED(r) ((r) != 0)
@@ -22,3 +23,11 @@ u32 hidGetNpadStyleSet(HidNpadIdType id);
 Result hidInitializeVibrationDevices(HidVibrationDeviceHandle *, int, HidNpadIdType,
                                      HidNpadStyleTag);
 Result hidSendVibrationValues(const HidVibrationDeviceHandle *, const HidVibrationValue *, int);
+#ifdef NSL_HAPTICS_PROBE_HOST
+Result socketInitializeDefault(void);
+int nxlinkConnectToHost(bool redirect_stdout, bool redirect_stderr);
+void socketExit(void);
+bool appletMainLoop(void);
+Result hidGetActualVibrationValue(HidVibrationDeviceHandle, HidVibrationValue *);
+Result hidIsVibrationPermitted(bool *);
+#endif

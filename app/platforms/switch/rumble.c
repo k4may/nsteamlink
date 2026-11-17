@@ -285,6 +285,25 @@ static u32 location(int index, HidNpadIdType *id) {
         *id = HidNpadIdType_Handheld;
     return hidGetNpadStyleSet(*id);
 }
+/* Called under lock; preserve rejected wire bytes as well as accepted input so
+ * real-host setup/activation failures remain diagnosable without hot-path IO. */
+static void record_command(unsigned index, const uint8_t *command, size_t size,
+                            uint64_t received, uint64_t applied, Result result) {
+    sl_rumble_trace t = {.kind = 1, .slot = index, .received_ns = received,
+        .submitted_ns = applied, .sequence = slots[index].stream.stats.commands,
+        .size = size <= 69 ? (unsigned)size : 0, .result = result};
+    if (command && t.size)
+        memcpy(t.command, command, t.size);
+    record(&t);
+}
+static int reject_command(unsigned index, const uint8_t *command, size_t size,
+                           uint64_t received, Result result, const char *message) {
+    pthread_mutex_lock(&lock);
+    ++slots[index].stream.stats.rejected;
+    record_command(index, command, size, received, now_ns(), result);
+    pthread_mutex_unlock(&lock);
+    return SDL_SetError("%s: %08x", message, (unsigned)result);
+}
 int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
                       uint64_t received, void *unused) {
     (void)unused;
@@ -292,19 +311,17 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
         return SDL_SetError("Unknown Switch vibration controller");
     if (!initialized || !available)
         return SDL_SetError("Switch vibration worker unavailable");
-    if (!sl_haptic_valid_command(command, size)) {
-        pthread_mutex_lock(&lock);
-        ++slots[index].stream.stats.rejected;
-        pthread_mutex_unlock(&lock);
-        return SDL_SetError("Invalid Switch vibration command");
-    }
+    if (!sl_haptic_valid_command(command, size))
+        return reject_command((unsigned)index, command, size, received, UINT32_MAX,
+                              "Invalid Switch vibration command");
     HidNpadIdType id;
     u32 style = location(index, &id);
     unsigned count = style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual |
                               HidNpadStyleTag_NpadFullKey) ? 2 :
         style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight) ? 1 : 0;
     if (!count)
-        return SDL_SetError("No native vibration actuator");
+        return reject_command((unsigned)index, command, size, received, UINT32_MAX,
+                              "No native vibration actuator");
     pthread_mutex_lock(&lock);
     binding target = slots[index].target;
     pthread_mutex_unlock(&lock);
@@ -314,7 +331,8 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
         Result rc = hidInitializeVibrationDevices(target.handles, (int)count, id,
                                                    (HidNpadStyleTag)style);
         if (R_FAILED(rc))
-            return SDL_SetError("Switch vibration activation failed: %08x", (unsigned)rc);
+            return reject_command((unsigned)index, command, size, received, rc,
+                                  "Switch vibration activation failed");
     }
     uint64_t now = now_ns();
     pthread_mutex_lock(&lock);
@@ -329,12 +347,7 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
     }
     bool ok = sl_haptic_command(&s->stream, command, size, received, now,
         (style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual)) != 0);
-    sl_rumble_trace t = {.kind = 1, .slot = (unsigned)index, .received_ns = received,
-        .submitted_ns = now, .sequence = s->stream.stats.commands,
-        .size = size <= 69 ? (unsigned)size : 0, .result = ok ? 0 : UINT32_MAX};
-    if (command && t.size)
-        memcpy(t.command, command, t.size);
-    record(&t);
+    record_command((unsigned)index, command, size, received, now, ok ? 0 : UINT32_MAX);
     pthread_cond_signal(&wake);
     pthread_mutex_unlock(&lock);
     return ok ? 0 : SDL_SetError("Invalid or overflowing Switch vibration command");

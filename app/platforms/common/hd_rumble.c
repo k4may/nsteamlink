@@ -1,6 +1,42 @@
 #include "platform/hd_rumble.h"
 #include <math.h>
 
+/* Ordinary rumble thresholds adapted from SDL's Switch HIDAPI encoder,
+ * Copyright (C) 1997-2025 Sam Lantinga; Valve contributed Switch driver logic.
+ * zlib license: third_party/sdl-rumble-LICENSE.txt. This is an altered lookup
+ * and packing adaptation, verified against fixed Valve SDL original code.
+ * Source reference: SDL a962f40bbba175e9716557a25d5d7965f134a3d3.
+ * The independent native decoder below does not incorporate MissionControl. */
+static unsigned ordinary_index(uint16_t value) {
+    static const uint16_t thresholds[101] = {
+        0, 514, 775, 921, 1096, 1303, 1550, 1843, 2192, 2606, 3100, 3686,
+        4383, 5213, 6199, 7372, 7698, 8039, 8395, 8767, 9155, 9560, 9984,
+        10426, 10887, 11369, 11873, 12398, 12947, 13520, 14119, 14744,
+        15067, 15397, 15734, 16079, 16431, 16790, 17158, 17534, 17918,
+        18310, 18711, 19121, 19540, 19967, 20405, 20851, 21308, 21775,
+        22251, 22739, 23236, 23745, 24265, 24797, 25340, 25894, 26462,
+        27041, 27633, 28238, 28856, 29488, 30134, 30794, 31468, 32157,
+        32861, 33581, 34316, 35068, 35836, 36620, 37422, 38242, 39079,
+        39935, 40809, 41703, 42616, 43549, 44503, 45477, 46473, 47491,
+        48531, 49593, 50679, 51789, 52923, 54082, 55266, 56476, 57713,
+        58977, 60268, 61588, 62936, 64315, 65535
+    };
+    unsigned lo = 0, hi = 100;
+    while (lo < hi) {
+        unsigned mid = (lo + hi) / 2;
+        if (value <= thresholds[mid]) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+uint32_t sl_hd_ordinary_word(uint16_t low, uint16_t high) {
+    if (!low && !high)
+        return 0x40400100;
+    unsigned a = ordinary_index(low), b = ordinary_index(high);
+    return 0x403d0074u | b << 9 | (a & 1u) << 23 | (a >> 1) << 24;
+}
+
 /* Protocol facts checked against MissionControl 71a837f's independent decoder.
  * Integer coordinates and explicit masks avoid ABI-dependent C bitfields.
  * This implementation does not link or incorporate that GPL-2.0-only decoder. */

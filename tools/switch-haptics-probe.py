@@ -22,15 +22,55 @@ def close_values(a, b):
         for x, y in zip(a, b))
 
 
+def uint(value, label, bits=64):
+    if type(value) is not int or not 0 <= value < 1 << bits:
+        raise ValueError(f"invalid {label}")
+
+
+def output_values(values):
+    if not isinstance(values, list) or len(values) != 2:
+        raise ValueError("output must contain two motor values")
+    for v in values:
+        if not isinstance(v, list) or len(v) != 4 or any(
+                type(x) not in (int, float) or not math.isfinite(x) for x in v):
+            raise ValueError("invalid motor parameter array")
+        if not (0 <= v[0] <= 1 and 0 <= v[2] <= 1 and 40 <= v[1] <= 640 and 80 <= v[3] <= 1280):
+            raise ValueError("motor parameters outside decoder range")
+
+
+def fixture_wire(sequence):
+    # Fixed Valve pulse, six times on each report side, then the absolute
+    # 80/640Hz two-band fixture. Do not certify whatever a broken fixture emits.
+    words = [0xc0050000, 0x40400100] if sequence <= 6 else [0x40400100, 0xc0050000]
+    if sequence == 13:
+        words = [0x60208180] * 2
+    return bytes([13, 10, 0, 0, 0, 16, 0]) + b"".join(w.to_bytes(4, "little") for w in words) + bytes(54)
+
+
 def analyze(records, reference):
+    try:
+        return _analyze(records, reference)
+    except (KeyError, ValueError, IndexError, TypeError, OverflowError, subprocess.SubprocessError) as error:
+        return {"software_path_verified": False, "physical_fidelity_verified": False,
+                "loader_return_verified": False, "ipc_readback_verified": False,
+                "independent_reference_values_match": False, "errors": [str(error)]}
+
+
+def _analyze(records, reference):
     errors = []
     stages = {r.get("stage"): r for r in records if r.get("stage") in
               ("begin", "device", "joined", "stopped", "end")}
     for required in ("begin", "device", "joined", "stopped", "end"):
         if required not in stages:
             errors.append(f"missing {required} stage")
+    platform = stages.get("begin", {}).get("platform")
+    if platform not in ("switch", "host-simulation"):
+        errors.append("missing or unknown probe platform")
     commands = [r for r in records if r.get("stage") == "command"]
     for command in commands:
+        for name in ("seq", "slot", "received_ns", "apply_ns"):
+            uint(command.get(name), name)
+        uint(command.get("rc"), "command result", 32)
         wire = bytes.fromhex(command["wire"])
         if not wire or (wire[0] == 13 and
                         (len(wire) != 69 or wire[1:6] != bytes([10, 0, 0, 0, 16]))):
@@ -38,9 +78,21 @@ def analyze(records, reference):
     sends = [r for r in records if r.get("stage") == "send" and r["kind"] == 2]
     reads = [r for r in records if r.get("stage") == "readback"]
     all_sends = [r for r in records if r.get("stage") == "send"]
+    for r in all_sends:
+        for name in ("sent_ns", "completed_ns", "seq", "sample", "slot"):
+            uint(r.get(name), name)
+        uint(r.get("rc"), "output result", 32)
+        output_values(r.get("values"))
+        if r["kind"] not in (2, 3) or r["slot"] != 0:
+            errors.append("unexpected output kind or actuator slot")
+        if r["sent_ns"] > r["completed_ns"]:
+            errors.append("output completion precedes submission")
     native = [r for r in commands if bytes.fromhex(r["wire"])[0] == 13]
     if len(native) != 13:
         errors.append(f"expected 13 native fixture commands, received {len(native)}")
+    for r in native:
+        if bytes.fromhex(r["wire"]) != fixture_wire(r["seq"]):
+            errors.append(f"sequence {r['seq']}: fixture stimulus differs from the known source")
     if len(commands) != 14 or [r["seq"] for r in commands] != list(range(1, 15)):
         errors.append("missing, duplicated or reordered fixture commands")
     if any(r.get("rc", 1) or r.get("slot", -1) != 0 for r in commands):
@@ -76,7 +128,7 @@ def analyze(records, reference):
             expected.setdefault(command["seq"], [None, None])[motor] = values or [held]
             if values:
                 held = values[-1]
-    jitter, late, source_errors, matched, outputs = [], [], [], 0, 0
+    jitter, late, source_errors, delivery, matched, outputs = [], [], [], [], 0, 0
     playback_origin = None
     values_ok = len(native) == 13
     devices = stages.get("device", {}).get("devices", 2)
@@ -99,8 +151,12 @@ def analyze(records, reference):
                     not close_values(frame["values"][m], wanted[m]) for m in range(2)):
                 errors.append(f"sequence {seq} sample {index}: parameter/order mismatch")
                 values_ok = False
-            if not command["received_ns"] <= command["apply_ns"] <= frame["sent_ns"] <= frame["completed_ns"]:
+            for name in ("received_ns", "apply_ns"):
+                uint(command[name], name)
+            uint(frame["due_ns"], "output deadline")
+            if not command["received_ns"] <= command["apply_ns"] <= frame["due_ns"] <= frame["sent_ns"] <= frame["completed_ns"]:
                 errors.append(f"sequence {seq} sample {index}: invalid timestamp order")
+            delivery.append(frame["sent_ns"] - command["received_ns"])
             late.append(max(0, frame["sent_ns"] - frame["due_ns"]))
             if playback_origin is None:
                 playback_origin = frame["sent_ns"] - command["received_ns"]
@@ -131,7 +187,8 @@ def analyze(records, reference):
         errors.append("worker, queue or trace counters are incomplete or report failures")
     cleanup = [r for r in records if r.get("stage") == "send" and r["kind"] == 3]
     cleanup_ok = bool(cleanup) and all(
-        r["rc"] == 0 and all(v[0] == 0 and v[2] == 0 for v in r["values"])
+        r["rc"] == 0 and r["slot"] == 0 and len(r["values"]) == 2 and
+        all(v[0] == 0 and v[2] == 0 for v in r["values"])
         for r in cleanup)
     if not cleanup_ok:
         errors.append("missing or failed native zero-output cleanup")
@@ -141,7 +198,7 @@ def analyze(records, reference):
     if stop_ok:
         wire = bytes.fromhex(stop_commands[0]["wire"])
         stop_ok = wire == bytes([1]) + bytes(len(wire)-1) and len(wire) in (9, 21)
-        stop_ok &= stop[0]["rc"] == 0 and all(v[0] == v[2] == 0 for v in stop[0]["values"])
+        stop_ok &= stop[0]["rc"] == 0 and stop[0]["slot"] == 0 and all(v[0] == v[2] == 0 for v in stop[0]["values"])
         stop_ok &= stop_commands[0]["received_ns"] <= stop_commands[0]["apply_ns"] <= stop[0]["sent_ns"]
     if not stop_ok:
         errors.append("missing or failed explicit ordinary zero-output command")
@@ -151,26 +208,32 @@ def analyze(records, reference):
     if not stopped_ok:
         errors.append("missing or nonzero system parameter readback after worker join")
     software_ok = not errors and counters_ok and stages.get("end", {}).get("software_ok", False)
+    readback_ok = bool(outputs) and values_ok and matched == outputs
     return {
         "software_path_verified": software_ok,
+        "platform": platform,
         "native_commands": len(native), "native_samples": outputs,
         "independent_reference_values_match": bool(outputs) and values_ok,
         "max_interval_error_ns": max(jitter, default=0),
         "max_submission_lateness_ns": max(late, default=0),
         "max_source_timeline_error_ns": max(source_errors, default=0),
+        "max_receive_to_submit_ns": max(delivery, default=0),
         "sample_timing_within_500us": bool(jitter) and max(jitter) <= 500000 and
                                        bool(source_errors) and max(source_errors) <= 500000,
         "ipc_readback_matched_samples": matched,
-        "ipc_readback_verified": bool(outputs) and values_ok and matched == outputs,
+        "parameter_readback_values_match": readback_ok,
+        "ipc_readback_verified": readback_ok and platform == "switch",
         "zero_output_cleanup_verified": cleanup_ok,
         "explicit_stop_verified": stop_ok,
-        "stopped_ipc_readback_verified": stopped_ok,
+        "stopped_parameter_readback_matches": stopped_ok,
+        "stopped_ipc_readback_verified": stopped_ok and platform == "switch",
         "vibration_permitted": stages.get("device", {}).get("permitted", False),
         "physical_fidelity_verified": False,
         "loader_return_verified": False,
         "errors": errors,
-        "boundary": "Original DeviceWrite/native worker/HID IPC trace and parameter readbacks; "
-                    "no proof of electrical/mechanical response or hbmenu screen state",
+        "boundary": ("Host simulation of HID terminals; no real Switch IPC. " if platform == "host-simulation" else
+                    "Original DeviceWrite/native worker/HID IPC trace and parameter readbacks. ") +
+                    "No proof of electrical/mechanical response or hbmenu screen state",
     }
 
 

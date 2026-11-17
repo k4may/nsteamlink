@@ -147,6 +147,11 @@ def main():
         checks.append(
             "collector and upload/publication bundle gate accept actual ordinary NRO"
         )
+        missing_license = base / "missing-license"
+        shutil.copytree(bundle, missing_license)
+        (missing_license / "sdl-rumble-LICENSE.txt").unlink()
+        run([bundle_checker, missing_license], "Unexpected/missing release files")
+        checks.append("upload/publication gate rejects missing SDL rumble license")
         extra = base / "extra-bundle"
         shutil.copytree(bundle, extra)
         (extra / "switch-video-probe.nro").write_bytes(b"private tool")

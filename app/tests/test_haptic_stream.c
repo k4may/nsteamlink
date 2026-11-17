@@ -72,7 +72,7 @@ int main(void) {
     /* An explicit ordinary stop/replace discards all queued native frames. */
     assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
     assert(s.count == 0 && sl_haptic_advance(&s, start, &f));
-    assert(f.values[0].amp_low == 1 && f.values[1].amp_low == 0);
+    assert(fabsf(f.values[0].amp_low - .557193398f) < 1e-7f && f.values[1].amp_low == 0);
     assert(!sl_haptic_advance(&s, start + 9999999, &f));
     assert(sl_haptic_advance(&s, start + 10000000, &f));
     assert(f.values[0].amp_low == 0);
@@ -131,7 +131,7 @@ int main(void) {
     sl_haptic_init(&s);
     assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
     assert(sl_haptic_command(&s, pulse, 69, start + 50000000, start, true));
-    assert(sl_haptic_advance(&s, start, &f) && !f.native && f.values[0].amp_low == 1);
+    assert(sl_haptic_advance(&s, start, &f) && !f.native && fabsf(f.values[0].amp_low - .557193398f) < 1e-7f);
     assert(!sl_haptic_advance(&s, start + 9999999, &f));
     assert(sl_haptic_advance(&s, start + 10000000, &f) && !f.native && f.values[0].amp_low == 0);
     assert(s.count == 3);
@@ -161,7 +161,17 @@ int main(void) {
         if (expired)
             assert(sl_haptic_advance(&s, start + 10000000, &f) && !f.native);
         assert(sl_haptic_advance(&s, start + gap, &f) && f.native);
-        assert(f.values[0].amp_low == (expired ? 0 : 1));
+        assert(fabsf(f.values[0].amp_low - (expired ? 0 : .557193398f)) < 1e-7f);
     }
+
+    /* Playback expiry can happen while a pre-expiry wire packet is waiting
+     * in IHS's owner queue. Its decoder history must survive that expiry. */
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
+    assert(sl_haptic_advance(&s, start, &f) && !f.native);
+    assert(sl_haptic_advance(&s, start + 10000000, &f) && !f.native);
+    assert(sl_haptic_command(&s, repeat, 69, start + 5000000, start + 20000000, true));
+    assert(sl_haptic_advance(&s, start + 20000000, &f) && f.native);
+    assert(fabsf(f.values[0].amp_low - .557193398f) < 1e-7f);
     puts("PASS native pulse preservation, absolute deadlines, late scheduling, gaps, overflow and stop");
 }

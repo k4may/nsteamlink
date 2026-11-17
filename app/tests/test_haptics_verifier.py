@@ -32,12 +32,12 @@ def reference_run(argv, *, input, **kwargs):
 
 
 def fixture():
-    records = [dict(stage="begin"), dict(stage="device", devices=2, style=1,
+    records = [dict(stage="begin", platform="switch"), dict(stage="device", devices=2, style=1,
                permitted=True, activate=0, permission_rc=0)]
     for seq in range(1, 14):
-        words = [0x40400100, 0xc0050000] if seq <= 6 else [0xc0050000, 0x40400100]
-        bands = [[ZERO, ZERO, ZERO], [ZERO, PULSE, ZERO]] if seq <= 6 else [
-                  [ZERO, PULSE, ZERO], [ZERO, ZERO, ZERO]]
+        words = [0xc0050000, 0x40400100] if seq <= 6 else [0x40400100, 0xc0050000]
+        bands = [[ZERO, PULSE, ZERO], [ZERO, ZERO, ZERO]] if seq <= 6 else [
+                  [ZERO, ZERO, ZERO], [ZERO, PULSE, ZERO]]
         if seq == 13:
             words, bands = [0x60208180] * 2, [[ABSOLUTE], [ABSOLUTE]]
         wire = bytes([13, 10, 0, 0, 0, 16, 0]) + b"".join(w.to_bytes(4, "little") for w in words) + bytes(54)
@@ -56,7 +56,7 @@ def fixture():
                     dict(stage="send", kind=2, slot=0, seq=14, sample=0, rc=0, values=[ZERO, ZERO],
                          sent_ns=680020000, completed_ns=680030000),
                     dict(stage="send", kind=3, slot=0, seq=0, rc=0, values=[ZERO, ZERO],
-                         sent_ns=700000000, completed_ns=700010000),
+                         sample=0, sent_ns=700000000, completed_ns=700010000),
                     dict(stage="stopped", rc=[0, 0], amplitudes=[0]*4),
                     dict(stage="joined", starts=1, joins=1, running=False, failures=0, io_rc=0,
                          rejected=0, dropped=0, trace_lost=0, queued=14, applied=14, sends=39,
@@ -78,6 +78,31 @@ class VerifierTests(unittest.TestCase):
         self.assertEqual(report["native_samples"], 37)
         self.assertFalse(report["physical_fidelity_verified"])
         self.assertFalse(report["loader_return_verified"])
+
+    def test_platform_marker_limits_claims(self):
+        rows = fixture()
+        rows[0]["platform"] = "host-simulation"
+        report = self.run_report(rows)
+        self.assertTrue(report["software_path_verified"])
+        self.assertTrue(report["parameter_readback_values_match"])
+        self.assertTrue(report["stopped_parameter_readback_matches"])
+        self.assertFalse(report["ipc_readback_verified"])
+        self.assertFalse(report["stopped_ipc_readback_verified"])
+        rows[0]["platform"] = "unknown"
+        self.assertFalse(self.run_report(rows)["software_path_verified"])
+
+    def test_self_consistent_wrong_fixture_is_rejected(self):
+        rows = fixture()
+        command = next(r for r in rows if r["stage"] == "command")
+        wire = bytearray.fromhex(command["wire"])
+        wire[7:11], wire[11:15] = wire[11:15], wire[7:11]
+        command["wire"] = wire.hex()
+        for r in rows:
+            if r["stage"] == "send" and r.get("seq") == 1:
+                r["values"].reverse()
+        # Decoder and outputs agree, but the intended left-side stimulus was
+        # changed. A self-consistency check alone cannot validate the fixture.
+        self.assertFalse(self.run_report(rows)["software_path_verified"])
 
     def test_missing_wrong_reordered_and_failed(self):
         for case in ("end", "sample", "parameter", "order", "ipc", "cleanup", "joined", "drop", "stopped"):
@@ -182,6 +207,25 @@ class VerifierTests(unittest.TestCase):
                 report = json.loads(output.read_text())
                 self.assertTrue(report["software_path_verified"])
                 self.assertEqual(report["collection"]["timed_out"], timed_out)
+
+    def test_wrong_stop_target_and_noncausal_timestamps(self):
+        for case in ("stop_slot", "cleanup_slot", "cleanup_time", "early_deadline", "empty_cleanup"):
+            with self.subTest(case=case):
+                rows = fixture()
+                if case == "early_deadline":
+                    r = next(r for r in rows if r["stage"] == "send" and r["seq"] == 1)
+                    r["due_ns"] = r["sent_ns"] + 1
+                elif case.startswith("stop"):
+                    next(r for r in rows if r["stage"] == "send" and r["seq"] == 14)["slot"] = 1
+                else:
+                    r = next(r for r in rows if r.get("kind") == 3)
+                    if case == "cleanup_slot":
+                        r["slot"] = 1
+                    elif case == "cleanup_time":
+                        r["completed_ns"] = r["sent_ns"] - 1
+                    else:
+                        r["values"] = []
+                self.assertFalse(self.run_report(rows)["software_path_verified"])
 
 
 if __name__ == "__main__":

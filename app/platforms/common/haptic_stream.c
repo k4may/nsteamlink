@@ -1,5 +1,4 @@
 #include "platform/haptic_stream.h"
-#include <math.h>
 #include <string.h>
 
 static uint16_t le16(const uint8_t *p) {
@@ -29,35 +28,27 @@ void sl_haptic_stop(sl_haptic_stream *s, uint64_t now) {
     s->current.sequence = stats.commands;
     s->dirty = true;
 }
-static void seed(sl_hd_state *s, const sl_hd_value *v) {
-    const float amps[] = {v->amp_low, v->amp_high};
-    for (unsigned i = 0; i < 2; ++i) {
-        int a = amps[i] > 0 ? (int)lroundf(log2f(amps[i]) * 32) : -256;
-        s->amplitude[i] = a < -256 ? -256 : a > 0 ? 0 : a;
-        s->frequency[i] = 0; /* ordinary path uses 160/320 Hz */
-    }
-}
 bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
                        uint64_t received, uint64_t now, bool paired) {
     if (!sl_haptic_valid_command(b, size))
         goto reject;
     if (b[0] == 1 && (size == 9 || size == 21)) {
-        float low = le16(b + 1) / 65535.0f, high = le16(b + 3) / 65535.0f;
+        uint16_t low = le16(b + 1), high = le16(b + 3);
         uint32_t ms = le32(b + 5);
         s->count = s->head = 0;
         s->source_epoch = received;
         s->playback_epoch = now;
         s->source_epoch_valid = true;
         ++s->stats.commands;
-        s->current = (sl_haptic_frame){.values = {{low, 160, high, 320},
-                                                  {low, 160, high, 320}},
+        s->current = (sl_haptic_frame){
             .due_ns = now, .received_ns = received, .sequence = s->stats.commands};
-        if (paired) {
-            s->current.values[0].amp_high = 0;
-            s->current.values[1].amp_low = 0;
+        for (unsigned motor = 0; motor < 2; ++motor) {
+            sl_hd_samples mapped;
+            uint32_t word = sl_hd_ordinary_word(paired && motor == 1 ? 0 : low,
+                                                paired && motor == 0 ? 0 : high);
+            sl_hd_decode(&s->decoder[motor], word, &mapped);
+            s->current.values[motor] = mapped.values[0];
         }
-        seed(&s->decoder[0], &s->current.values[0]);
-        seed(&s->decoder[1], &s->current.values[1]);
         s->expires_ns = ms && (low || high) ? now + (uint64_t)ms * 1000000 : 0;
         s->wire_expires_ns = ms && (low || high) ? received + (uint64_t)ms * 1000000 : 0;
         s->dirty = true;
@@ -171,11 +162,9 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
         s->current = (sl_haptic_frame){.values = {silence(), silence()},
             .due_ns = s->expires_ns, .received_ns = s->current.received_ns,
             .sequence = s->current.sequence};
-        if (s->wire_expires_ns) {
-            sl_hd_reset(&s->decoder[0]);
-            sl_hd_reset(&s->decoder[1]);
-            s->wire_expires_ns = 0;
-        }
+        /* Wire state expires when the next received timestamp crosses its
+         * deadline. An older packet may still be waiting in the owner queue;
+         * local playback time cannot erase that packet's decoder history. */
         s->expires_ns = 0;
         s->dirty = true;
     }

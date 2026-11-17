@@ -96,7 +96,11 @@ int main(int argc, char **argv) {
     }
     struct timeval timeout = {.tv_usec = 100000};
     setsockopt(log_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    log_line("{\"stage\":\"begin\",\"physical_fidelity_verified\":false}");
+#ifdef NSL_HAPTICS_PROBE_HOST
+    log_line("{\"stage\":\"begin\",\"platform\":\"host-simulation\",\"physical_fidelity_verified\":false}");
+#else
+    log_line("{\"stage\":\"begin\",\"platform\":\"switch\",\"physical_fidelity_verified\":false}");
+#endif
     IHS_Init();
     ihs = true;
     if (SDL_Init(SDL_INIT_GAMECONTROLLER) < 0)

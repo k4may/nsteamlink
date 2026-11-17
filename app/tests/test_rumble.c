@@ -94,12 +94,18 @@ int main(void) {
     const uint8_t invalid[] = {13};
     assert(sl_rumble_command(0, invalid, sizeof(invalid), 0, NULL) == -1);
     assert(initializes == 0 && snapshot().sends == 0);
+    sl_rumble_trace rejected[2];
+    assert(sl_rumble_copy_trace(rejected, 2) == 1);
+    assert(rejected[0].kind == 1 && rejected[0].result == UINT32_MAX &&
+           rejected[0].size == 1 && rejected[0].command[0] == 13);
     assert(rumble(65535, 32768, 30) == 0);
     await_sends(1);
     pthread_mutex_lock(&capture_lock);
     assert(destination == HidNpadIdType_Handheld && last_count == 2);
-    assert(last[0].amp_low == 1 && last[0].amp_high == 0);
-    assert(last[1].amp_low == 0 && fabsf(last[1].amp_high - .5f) < .00002f);
+    assert(fabsf(last[0].amp_low - .557193398f) < 1e-7f && last[0].amp_high == 0);
+    assert(last[1].amp_low == 0 && fabsf(last[1].amp_high - .278596699f) < 1e-7f);
+    assert(fabsf(last[0].freq_low - 149.933411f) < .0001f);
+    assert(fabsf(last[1].freq_high - 149.933411f) < .0001f);
     pthread_mutex_unlock(&capture_lock);
     await_sends(2);
     pthread_mutex_lock(&capture_lock);
@@ -159,6 +165,11 @@ int main(void) {
     await_sends(before + 1);
     init_error = 456;
     assert(rumble(1, 2, 3) == -1);
+    n = sl_rumble_copy_trace(trace, 128);
+    bool activation_traced = false;
+    for (size_t i = 0; i < n; ++i)
+        activation_traced |= trace[i].kind == 1 && trace[i].result == 456 && trace[i].size == 9;
+    assert(activation_traced);
     init_error = 0;
     assert(__wrap_SDL_GameControllerRumble(NULL, 1, 2, 3) == -1);
     sl_rumble_shutdown();

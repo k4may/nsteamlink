@@ -22,5 +22,8 @@ typedef struct sl_hd_samples {
 void sl_hd_reset(sl_hd_state *state);
 void sl_hd_current(const sl_hd_state *state, sl_hd_value *out);
 void sl_hd_decode(sl_hd_state *state, uint32_t word, sl_hd_samples *out);
+/* Fixed Valve SDL Switch ordinary-rumble parameter mapping, before transport
+ * pacing. The resulting absolute word also seeds relative native history. */
+uint32_t sl_hd_ordinary_word(uint16_t low, uint16_t high);
 /* Validate report ID and exact wire size; no state changes on invalid input. */
 bool sl_hd_report(sl_hd_state state[2], const void *data, size_t size, sl_hd_samples out[2]);

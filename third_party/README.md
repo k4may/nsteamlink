@@ -128,3 +128,9 @@ Steam Link 客户端原指令对照为准，开源实现只用于算法实现参
 LLVM-exception，许可位于 `app/platforms/common/LLVM-LICENSE.txt`。此处没有32元素上限；
 用途是保留官方主机地址比较器存在三秒时间容差时的实际排列，而不是依赖平台 std::sort。
 `host_addresses.cpp` 的生产策略与固定官方原始指令向量逐项比较，参见公网协议参考 §10.1。
+
+`app/platforms/common/hd_rumble.c` 的普通震动阈值表适配自 SDL Switch HIDAPI
+驱动，源码参考 commit `a962f40bbba175e9716557a25d5d7965f134a3d3`，zlib。
+查找及打包逻辑是本项目的改写；量化行为以固定 Valve Steam Link 所带 SDL 原指令
+穷举对照为准。完整版权及许可在 `sdl-rumble-LICENSE.txt`，发布收集器一并带出。
+原生压缩解码器不来自该表，也不链接 MissionControl；详见协议参考 §22.8。

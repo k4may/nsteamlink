@@ -3,7 +3,8 @@
 
 Requires pefile, capstone and unicorn, plus steam-gyro-host-audit.py beside this
 file. Executes original instructions, with synthetic controller objects, clocks,
-device eligibility, locks and a recording HID/SDL terminal. Does not execute
+eligibility inputs, locks and a recording HID/SDL terminal. The original output
+eligibility predicate executes; its initialization is not emulated. Does not execute
 Steam Input API dispatch, network delivery, Nintendo encoding or physical motors.
 The Linux receiver is from Valve's 1.4.5.326 standalone Steam Link archive.
 """
@@ -47,10 +48,14 @@ def indirect(m, pe, instruction, callback, stub):
 
 
 def producer(pe, kind, low=0x1234, high=0xabcd, side=0, duration=1000,
-             elapsed=1000, off=0, repeats=0):
+             elapsed=1000, off=0, repeats=0, enhanced=True, writes_enabled=True):
     m = gyro.Machine(pe)
     obj, handler, hvtable, device, dvtable = [m.alloc() for _ in range(5)]
     m.write(obj + 8, 38, 4)  # actual Nintendo Switch Pro controller type
+    m.write(obj + 0x4f8, 0x057e, 2)
+    m.write(obj + 0x4fa, 0x2009, 2)
+    m.write(obj + 0x588, int(enhanced), 1)
+    m.write(0x13980d070, int(writes_enabled), 4)
     m.write(obj + 0x10, handler)
     m.write(handler, hvtable)
     m.write(handler + 0x10, device)
@@ -69,7 +74,6 @@ def producer(pe, kind, low=0x1234, high=0xabcd, side=0, duration=1000,
         m.ret(n)
 
     m.stubs[0x480000] = record
-    m.stubs[0x1386746f0] = lambda: m.ret(1)  # synthetic device-output eligibility
     clock = lambda: m.ret(100000)
     elapsed_clock = lambda: m.ret(elapsed)
     if kind == "rumble":
@@ -92,7 +96,8 @@ def producer(pe, kind, low=0x1234, high=0xabcd, side=0, duration=1000,
         m.write(0x4f0008 + 0x28, repeats, 2)
         m.write(0x4f0008 + 0x30, 0, 1)
         args = (obj, side, duration, off)
-    m.allowed = [(start, end), (0x13867f7f0, 0x13867f7fb)]
+    m.allowed = [(start, end), (0x13867f7f0, 0x13867f7fb),
+                 (0x1386746f0, 0x13867475a), (0x138673260, 0x1386733ea)]
     m.run(start, *args)
     return commands
 
@@ -180,6 +185,9 @@ def audit(pe, linux):
     assert imports[0x13918e380] == b"Plat_RelativeTicks"
     assert imports[0x13918e1c0] == b"Plat_TickDiffMilliSec"
     assert imports[0x13918e4b8] == b"Plat_FloatTime"
+    for enhanced, enabled in ((False, True), (True, False), (False, False)):
+        for kind in ("rumble", "pulse"):
+            assert producer(pe, kind, enhanced=enhanced, writes_enabled=enabled) == []
     ordinary = producer(pe, "rumble")[0]
     assert ordinary[:9] == b"\x01" + struct.pack("<HHI", 0x1234, 0xabcd, 5000)
     assert producer(pe, "rumble", elapsed=49) == []
@@ -216,11 +224,13 @@ def audit(pe, linux):
         outputs.append({"name": name, "command": command.hex(), "receiver": win})
     return {"host_sha256": HOST_SHA, "linux_receiver_sha256": LINUX_SHA,
             "passed": True, "cases": outputs,
-            "observations": {"nonzero_rumble_gate_ms": 50,
+            "observations": {"original_output_eligibility_executes": True,
+                             "type38_requires_enabled_writes_and_enhanced_state": True,
+                             "nonzero_rumble_gate_ms": 50,
                              "pulse_gate_ms": 50,
                              "switch_pulse_duration_off_repeat_collapsed": True},
-            "boundary": "Synthetic eligibility, clocks, controller state, locks and recording "
-                        "HID/SDL terminals. Original producer, protocol forwarder and two "
+            "boundary": "Synthetic clocks, controller state and eligibility inputs, locks and recording "
+                        "HID/SDL terminals. Original output eligibility, producer, protocol forwarder and two "
                         "receivers execute. No API dispatch, network, Switch API, sample "
                         "timing or physical actuator proof; no claim of arbitrary HD waveform "
                         "generation by this host branch."}

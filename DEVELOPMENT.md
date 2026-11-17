@@ -131,6 +131,7 @@ runtime 执行协议 stop/join 并在外部使用归零后回收关闭的 decode
 | plume | beudbeud/plume | GPL | 参考实现，仅对照学习不链接 | M1 参考 |
 | FFmpeg(Switch) | Moonlight-Switch 预编译（averne NVDEC fork） | LGPL/GPL | H264 硬解 | M3 |
 | SDL2 | 系统 2.32.4 / `switch-sdl2` | zlib | 桌面渲染 / 音频 / 输入（Switch 图形使用 deko） | M3 起 |
+| SDL Switch rumble thresholds | SDL `a962f40bbba175e9716557a25d5d7965f134a3d3` | zlib | 普通震动量化表的适配；保留 sdl-rumble-LICENSE.txt，并与固定 Valve SDL 原指令对照 | M5 |
 | SDL2_ttf | 系统 2.24.0 / devkitPro `switch-sdl2_ttf` | zlib | 中文与平台共享字体、字形缓存 | M5 |
 | mbedTLS | 系统 2.28 / `switch-mbedtls` | Apache-2.0 | IHSlib 与 Switch SNS 加密后端 | M2 |
 | libopus | 官方1.5.2归档，SHA256固定，fixed-point构建 | BSD-3 | multistream float解码及按帧ID恢复，见协议参考§72 | M4 |

@@ -17,6 +17,9 @@ static pthread_t owner;
 static SDL_GameController *controller;
 static SDL_JoystickID instance;
 static unsigned activations;
+static pthread_mutex_t hid_lock = PTHREAD_MUTEX_INITIALIZER;
+static HidVibrationValue hid_outputs[16][2];
+static unsigned hid_output_count;
 static int device_count(void *p) { (void)p; return 1; }
 static int device_index(SDL_JoystickID id, void *p) { (void)p; return id == instance ? 0 : -1; }
 static SDL_JoystickID device_id(int i, void *p) { (void)i; (void)p; return instance; }
@@ -31,8 +34,12 @@ Result hidInitializeVibrationDevices(HidVibrationDeviceHandle *handles, int n, H
     return 0;
 }
 Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrationValue *v, int n) {
-    (void)h; (void)v;
+    (void)h;
     assert(!pthread_equal(owner, pthread_self()) && n == 2);
+    pthread_mutex_lock(&hid_lock);
+    assert(hid_output_count < 16);
+    memcpy(hid_outputs[hid_output_count++], v, sizeof(hid_outputs[0]));
+    pthread_mutex_unlock(&hid_lock);
     return 0;
 }
 int main(void) {
@@ -100,6 +107,36 @@ int main(void) {
         previous = trace[i].completed_ns;
         ++samples;
     }
+    /* The original 21-byte ordinary envelope must reach the same native HID
+     * terminal with fixed-SDL golden amplitudes/frequencies, then stop. */
+    pthread_mutex_lock(&hid_lock);
+    unsigned before = hid_output_count;
+    pthread_mutex_unlock(&hid_lock);
+    const uint8_t ordinary[21] = {1, 0x34, 0x12, 0xcd, 0xab, 0xe8, 0x03};
+    const uint8_t stop[21] = {1};
+    for (unsigned step = 0; step < 2; ++step) {
+        assert(IHS_HIDDeviceWrite(device->device, step ? stop : ordinary, 21) == 0);
+        IHS_HIDSDLApplyPendingWrites(session);
+        bool delivered = false;
+        for (unsigned tries = 0; tries < 500; ++tries) {
+            pthread_mutex_lock(&hid_lock);
+            delivered = hid_output_count > before + step;
+            pthread_mutex_unlock(&hid_lock);
+            if (delivered) break;
+            struct timespec pause = {.tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
+        assert(delivered);
+        pthread_mutex_lock(&hid_lock);
+        for (unsigned motor = 0; motor < 2; ++motor) {
+            HidVibrationValue v = hid_outputs[before + step][motor];
+            assert(fabsf(v.amp_low - (step ? 0 : .0441941731f)) < 1e-7f);
+            assert(fabsf(v.amp_high - (step ? 0 : .377291113f)) < 1e-7f);
+            assert(fabsf(v.freq_low - (step ? 160 : 149.933411f)) < .0001f);
+            assert(fabsf(v.freq_high - (step ? 320 : 149.933411f)) < .0001f);
+        }
+        pthread_mutex_unlock(&hid_lock);
+    }
     sl_rumble_shutdown();
     sl_rumble_snapshot snapshot;
     sl_rumble_get_snapshot(&snapshot);
@@ -107,7 +144,7 @@ int main(void) {
     assert(!snapshot.send_failures && !snapshot.stop_failures);
     IHS_HIDSDLOutputStats output;
     IHS_HIDSDLGetOutputStats(session, &output);
-    assert(output.queued == 1 && output.applied == 1 && !output.rejected && !output.queueDropped);
+    assert(output.queued == 3 && output.applied == 3 && !output.rejected && !output.queueDropped);
     IHS_SessionDestroy(session);
     IHS_HIDProviderSDLDestroy(provider);
     SDL_GameControllerClose(controller);

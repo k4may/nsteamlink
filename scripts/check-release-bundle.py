@@ -25,6 +25,7 @@ def check(bundle):
         "build_identity.json",
         "diagnostic_exclusion.json",
         "opus-LICENSE.txt",
+        "sdl-rumble-LICENSE.txt",
     }
     optional = {"devkitpro-packages.txt", "SHA256SUMS"}
     entries = {entry.name for entry in bundle.iterdir()}

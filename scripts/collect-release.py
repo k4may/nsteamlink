@@ -55,6 +55,7 @@ def collect(build, output):
         shutil.copyfile(
             ROOT / "third_party/opus-LICENSE.txt", stage / "opus-LICENSE.txt"
         )
+        shutil.copyfile(ROOT / "third_party/sdl-rumble-LICENSE.txt", stage / "sdl-rumble-LICENSE.txt")
         (stage / "diagnostic_exclusion.json").write_text(
             json.dumps(audit, indent=2) + "\n"
         )

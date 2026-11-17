@@ -1486,17 +1486,36 @@ if(NSL_PLATFORM STREQUAL "desktop")
     target_link_libraries(nsl-haptic-pipeline-tests PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads m)
     add_test(NAME nsl-haptic-pipeline COMMAND nsl-haptic-pipeline-tests)
     set_tests_properties(nsl-haptic-pipeline PROPERTIES TIMEOUT 10)
+    add_executable(nsl-haptics-probe-host tests/test_haptics_probe_host.c platforms/switch/rumble.c
+        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+    target_include_directories(nsl-haptics-probe-host PRIVATE src tests/fakes
+        ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
+    target_compile_definitions(nsl-haptics-probe-host PRIVATE NSL_RUMBLE_TEST=1 NSL_HAPTICS_PROBE_HOST=1 NSL_DIAGNOSTICS=1)
+    target_compile_options(nsl-haptics-probe-host PRIVATE -Wall -Wextra -Wno-unknown-pragmas -UNDEBUG)
+    target_link_libraries(nsl-haptics-probe-host PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads m)
+    add_test(NAME nsl-haptics-probe-host COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_probe_host.py" --probe $<TARGET_FILE:nsl-haptics-probe-host>)
+    set_tests_properties(nsl-haptics-probe-host PROPERTIES TIMEOUT 15)
     add_executable(nsl-haptic-stream-tests tests/test_haptic_stream.c
         platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
     target_include_directories(nsl-haptic-stream-tests PRIVATE src)
     target_compile_options(nsl-haptic-stream-tests PRIVATE -Wall -Wextra -UNDEBUG)
     target_link_libraries(nsl-haptic-stream-tests PRIVATE m)
     add_test(NAME nsl-haptic-stream COMMAND nsl-haptic-stream-tests)
+    add_executable(nsl-haptic-source-time-tests tests/test_haptic_source_time.c
+        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+    target_include_directories(nsl-haptic-source-time-tests PRIVATE src)
+    target_compile_options(nsl-haptic-source-time-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-haptic-source-time-tests PRIVATE m)
+    add_test(NAME nsl-haptic-source-time COMMAND nsl-haptic-source-time-tests)
     add_test(NAME nsl-haptics-verifier COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_verifier.py")
     add_executable(nsl-hd-rumble-oracle tests/hd_rumble_oracle.c platforms/common/hd_rumble.c)
     target_include_directories(nsl-hd-rumble-oracle PRIVATE src)
     target_link_libraries(nsl-hd-rumble-oracle PRIVATE m)
+    add_executable(nsl-ordinary-rumble-oracle tests/ordinary_rumble_oracle.c platforms/common/hd_rumble.c)
+    target_include_directories(nsl-ordinary-rumble-oracle PRIVATE src)
+    target_link_libraries(nsl-ordinary-rumble-oracle PRIVATE m)
 
     add_executable(nsl-sensor-math-tests tests/test_sensor_math.c platforms/common/sensor_math.c)
     target_include_directories(nsl-sensor-math-tests PRIVATE src)

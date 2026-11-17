@@ -1329,8 +1329,15 @@ MissionControl 的 `switch_vibration_processor.cpp` 明确只取首样本，这�
 未经参考验证的频率、尾音或平滑。软件层应记录原始命令、解码结果和实际提交
 时间，以便定位是哪一层丢了信息。
 
-**Boundary：** 离线脚本使用合成 controller 对象、设备 eligibility、时钟、锁与
-最终 HID/SDL 记录终端；执行的是原始 producer、protocol forwarder 和 receiver。
+**Evidence / 输出开关：** 离线脚本也执行原始 eligibility 判断
+`0x1386746f0` 及其类型判断。固定 type 38 对象必须同时满足全局
+`0x13980d070 != 0` 和对象 `+0x588 != 0` 才输出普通/原生效果；关闭任一
+条件都不输出。这里只设置这两个输入值，没有执行完整 Steam 配置/初始化流程。
+实际串流还需从原始命令 trace 确认主机已启用原生输出，不能由声明 type 38
+推断游戏会发送效果。拒绝的原始命令和激活失败同样进入有界 trace，便于核对。
+
+**Boundary：** 离线脚本使用合成 controller 对象、eligibility 输入、时钟、锁与
+最终 HID/SDL 记录终端；执行的是原始 eligibility、producer、protocol forwarder 和 receiver。
 没有执行完整 Steam Input API 调用、真实 RemoteHID 网络、Switch IPC 或电机。
 MissionControl 解码结果是独立实现对照，也不是 HOS/控制器固件的时间执行证明。
 不能从这些结果宣称用户游戏必发原生包、实际样本间距已确认、HD 输出已完成，
@@ -1362,8 +1369,8 @@ python3 tools/steam-rumble-host-audit.py \
 
 `hd_rumble.c` 用显式掩码和整数对数坐标实现七种压缩格式，包括两侧独立状态、
 0–3 个样本、绝对及相对频率/振幅。其输出不是两路强度，而是每个 actuator
-的 low/high 两组频率和振幅。普通 `0x01` 继续使用原有线性强度、160/320Hz
-映射；这里没有声称它逐位复现 PC SDL 的原始 Nintendo 编码器或物理感受。
+的 low/high 两组频率和振幅。普通 `0x01` 使用固定 Valve SDL 的 Nintendo
+量化参数，详见 §22.8；不将参数对照当作完整 PC SDL 驱动时序或物理感受证明。
 
 **Evidence / 时间参考：** RenHDrum 的
 [5ms 多采样研究](https://github.com/trzz1214/RenHDrum/blob/f5223f63993cb317d24e3c9fd91619b8f527e7fd/docs/research/02-amfm-multisample-and-crisp-notes.md)
@@ -1398,6 +1405,9 @@ binding。设备切换先向旧 binding 发零，失败重试；
 | 官方 producer / receiver | `steam-rumble-host-audit.py`，固定官方二进制原指令 | 特定主机实际生成的包和接收端转交内容 |
 | 独立解码对照 | `check-switch-haptics.py` | 固定输入序列的样本数、顺序、两频带参数；不含时间与硬件 |
 | 实际接收链路 | CTest `hid_sdl_output` / `nsl-haptic-pipeline` | 真正 DeviceWrite、复制队列、owner drain、生产解码/线程；最后 HID 为 mock |
+| 接收/播放时钟交错 | CTest `nsl-haptic-source-time` | 同一收包历史在不同 drain 延迟下保留相同解码参数/顺序 |
+| 夹具自身离线集成 | CTest `nsl-haptics-probe-host` | 真正 NRO 夹具、格式化日志、worker 和分析器相互兼容；HID/socket 为模拟终端 |
+| 原生请求序列化 | `check-switch-haptics-ipc.py` | 生产 ARM64 分支与未修改 libnx IPC 206 的请求描述及缓冲字节一致；不执行 HOS |
 | 真机自包含夹具 | `switch-haptics-probe.py` + `nsl-haptics-probe.nro` | 实际 IPC 提交、系统参数读回、软件时间、零输出及 worker join |
 | 实际马达 | 同一手柄的原生直连与串流重放，加外部带宽充分的传感器 | 频谱、时间包络、能量、脉冲宽度的物理差异 |
 
@@ -1469,5 +1479,81 @@ worker 仍会发送本批次中后一个尚未提交的非零任务。发送前�
 **Boundary：** 固定 5ms 最小保持时间优先保留所有样本。无空闲的持续满载输入
 遇到 IPC 耗时或调度迟到仍可能积压、延迟甚至溢出，不能据此实现宣称硬实时
 200Hz；这些是应从 trace 验证的限制，不以源时间基准漂移掩盖，也不靠瞬间
-补发样本隐藏。普通 `0x01` 的线性映射及其与任意相对原生包混用的 PC SDL
-逐位等价性，仍没有由纯原生解码对照证明。
+补发样本隐藏。普通 `0x01` 的参数及混合相对解码采用 §22.8 的独立对照；
+完整 SDL 驱动的排队/刷新时序与物理等价性仍不由参数对照证明。
+
+### 22.8 接收历史、普通量化与原生序列化的离线交叉验证
+
+**Evidence / 更正：** `eeb225e` 在普通播放计时器到期时仍清除了 wire decoder
+状态。如果原生包在到期前收到、到期后才从 IHS owner 队列应用，相对包会继承
+错误的静音状态。保留接收历史，只有后续命令的接收时间跨过源到期时间时才
+使 wire 状态到期；本地播放停止与之独立。`test_haptic_source_time.c` 覆盖
+7×7 两侧格式配对、8 个接收时间点、6 种 owner 延迟、配对/独立两种布局，
+共 4,704 组交错。相同源输入的样本参数和顺序必须与无 drain 延迟的基线一致，
+不要求延迟后的实际播放时刻仍然按时。旧实现会失败，新实现保留该不变量。
+
+**Evidence / 普通参数：** Valve Linux Steam Link 1.4.5.326 所带
+`libSDL3.so.0` SHA-256 为
+`dda2c0b8617e63f6824aad07b7917c0cef58dceb8c0785faa783cbc99c1bbdb4`，
+内置 revision 为 `SDL-3.5.0-HEAD-HASH-NOTFOUND`，不据此臆造上游 commit。
+`check-steam-sdl-rumble.py` 执行其 High/Low amplitude lookup
+`0x22e260/0x22e2f0` 的全部 65,536 档输入，以及 complete encoder
+`0x230380` 的 1,120 组边界/随机参数；仅 clock 与最终 WritePacket 为终端。
+
+| low / high | 原始完整 10B 报告 | 解码后的活动频率与振幅 |
+|---|---|---|
+| 0 / 0 | `10 00 00 01 40 40 00 01 40 40` | 两频带静音，默认 160/320Hz |
+| 1 / 0 | `10 00 74 00 bd 40 74 00 bd 40` | low 约 0.00552427，活动频率约 149.933Hz |
+| 65535 / 65535 | `10 00 74 c8 3d 72 74 c8 3d 72` | 两频带各约 0.5571934、149.933Hz |
+| 4660 / 43981 | `10 00 74 a4 bd 46 74 a4 bd 46` | low 约 0.0441942，high 约 0.3772911，均约 149.933Hz |
+
+**Retraction：** 旧线性强度、160/320Hz 仅为 D-048 的近似，撤回其足以代表
+固定官方客户端普通参数的解释。合法振幅上限仍为 1.0，不等于参考编码器会
+把输入最大值映射为 1.0。`sl_hd_ordinary_word` 采用固定参考的量化表/编码，
+再由同一原生 decoder 产生幅频参数并设置精确相对状态，不用 float log 近似
+反推 decoder。配对 Joy-Con 保留低/高分侧规则，独立/Pro 保留两频带。
+阈值表的源码参考为已核验 SDL `a962f40b…`，版权/许可在
+`third_party/sdl-rumble-LICENSE.txt`；只复用量化表，查找/打包作了适配。
+
+生产普通编码与原始 lookup/full-encoder 共 66,656 组参数逐字节对照，其中
+low/high 各覆盖全部 uint16 值；不是穷举 2^32 种组合。随后将每个普通 word
+接三样本相对原生命令，生产 decoder 与独立 MissionControl 进程共比较
+266,624 个样本。此处证明参数/解码状态，不模拟 SDL 30ms 写队列、50ms 刷新、
+API duration 行为或所有平台/版本的同一硬件表现。
+
+**Evidence / 夹具与验证器：** `nsl-haptics-probe-host` 编译实际 NRO 夹具，
+仅替换 libnx HID/applet 和 nxlink socket 终端。原始刺激、DeviceWrite、worker、
+清理及 JSON 格式化均运行真实代码，并将输出交给同一个分析器和独立 decoder。
+必须出现完整 13 条原生命令、37 个原生样本、普通停止与退出清理，且原始
+刺激逐字节符合固定夹具，不对任意意外刺激自洽地解码后便认证通过。
+
+验证器拒绝停止/清理发错 slot、完成时间早于提交、提交早于自身 deadline、
+空/异常 motor 数组。host 模拟用 `platform=host-simulation` 标记，参数读回
+可以匹配，但 `ipc_readback_verified` 与 `stopped_ipc_readback_verified` 必须为
+false；不能把模拟系统当成真实 HOS。时序是否符合 500µs 阈值独立报告，host
+测试只验证软件数据/日志契约，不因模拟器时序抖动而捏造硬实时证明。
+
+**Evidence / 原生请求：** `check-switch-haptics-ipc.py` 用实际 Switch 编译器
+编译生产 `io_send`，不定义 `NSL_RUMBLE_TEST`，并链接安装 SDK 中未修改的
+`libnx.a(hid.o)`。在 ARM64 中分别运行生产路径与原始 `hidSendVibrationValues`，
+仅在 TLS/内存/ARUID 终端和最终 SVC 边界记录。Pro、handheld、JoyDual、单左、
+单右与零输出六例的 IPC 206 header、resource ID、两项 pointer descriptor
+及对应句柄/幅频缓冲逐字节一致。SDK archive SHA-256 为
+`12a59cdfdceab83e39ee129b0275dd803e393e83f19de3922a3b6cc95c767edd`。
+这比 host mock 更直接验证目标架构的请求构造，但不执行服务打开、HOS 接受/
+响应、连接权限、实际马达或系统调度。
+
+```sh
+# 需要本机 Switch SDK、Python unicorn/pyelftools；不连接设备。
+python3 tools/check-switch-haptics-ipc.py --output build/haptic-ipc.json
+python3 tools/check-steam-sdl-rumble.py --sdl /path/to/libSDL3.so.0 \
+  --oracle build/desktop/app/nsl-ordinary-rumble-oracle \
+  --decoder build/desktop/app/nsl-hd-rumble-oracle \
+  --reference build/haptic-reference/reference --output build/ordinary-parameters.json
+python3 app/tests/test_haptics_probe_host.py \
+  --probe build/desktop/app/nsl-haptics-probe-host \
+  --reference build/haptic-reference/reference --output build/host-fixture.json
+```
+
+**Boundary：** 以上是源码、固定原指令及模拟终端的离线证据。真实系统参数/
+时序、完整驱动行为、机械波形和 hbmenu 生命周期仍需单独实测。
