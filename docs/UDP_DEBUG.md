@@ -69,6 +69,22 @@ python3 tools/switch-haptics-calibration.py --log build/haptic-calibration.log \
 对照完成只表示诊断记录完整。长保持值一致不能替代原生夹具的严格 5ms 验收，
 也不证明马达波形或返回 hbmenu；具体刺激与判定边界见协议参考 §22.9。
 
+若需核对 Windows Steam 主机的实际版本、配置与脉冲开关，可在主机运行
+`tools/collect-steam-haptics-host.ps1`（Windows PowerShell 5.1+）。默认查找注册表
+中的 Steam 安装路径，在桌面生成 `steam-haptics-host-日期时间.zip`。包含当前
+steamclient DLL 的版本/SHA-256、相关 controller/streaming 日志、指定游戏
+（默认 AppID 1049320）的 VDF，以及全局/本地配置中匹配 haptic/rumble/vibration
+的行。缺少的可选文件列入 manifest；不停止 Steam，也不改变 Steam 配置。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host.ps1
+# Steam 未注册或另选游戏时可明确指定：
+powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host.ps1 -SteamRoot 'D:\Steam' -AppId 1049320
+```
+
+该归档用于匹配真实主机证据；本身不证明游戏支持原生效果。门禁及旧版本原始
+指令对照见协议参考 §22.10。配置收集不到时仍需以实际生效的游戏布局为准。
+
 ## 自包含真实主机会话测试
 
 诊断构建单独生成 `nsl-live-media-probe.nro`；普通发布构建不包含此测试入口。

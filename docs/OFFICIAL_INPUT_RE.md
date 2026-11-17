@@ -1613,3 +1613,57 @@ Rail），两个 mounted actuator 的 type=1（LRA）、position=1/2。长保持
 未证明系统内部编码正确或错误，更未验证原生压缩脉冲的物理等价。严格原生
 夹具的失败不被此诊断完成覆盖。轨道路径不能用仅覆盖 Bluetooth 的 raw
 output API 宣称已解决；需要进一步区分读回语义、系统编码与实际设备执行。
+
+### 22.10 原生脉冲的上游能力与配置门禁
+
+**Evidence / 实际串流：** `bff8af7` 的一次真实会话中，Activity 记录为
+`gameid=1049320 name=River City Girls`。从 serial 1 开始的 175 条命令/输出记录
+连续、无缺号；84 条普通命令中 41 条非零，43 条停止。两个成功接收的 10B
+Nintendo 效果都为静音；没有非零原生脉冲。另两个被拒绝的 effect 是 `03 30`
+和 `38 01 f0 f0 00` 设置命令，不应当作丢掉的游戏 HD 震动。IPC 输出无失败。
+这只证明本次路径未产生非零原生效果，不证明游戏或其他平台版本绝不支持。
+
+**Evidence / 固定主机：** `steam-haptics-routing-audit.py` 继续使用 §20.1 的
+DLL/SHA，在离线执行原始指令，而不从静音包或普通震动推断脉冲门禁已开启。
+
+| 阶段 | 原始地址 | 观察 |
+|---|---|---|
+| 活动配置应用 | `0x138665a20..0x138665c3d` | `+0x649` 仅在 preferences `+0xd4` 非零，且选用的 caps bit 13（`0x2000`）置位时为 true；普通 rumble 在独立 `+0x648` 字段检查 `0x204000` |
+| 配置到 slot | `0x13860edae..0x13860edb5`、`0x13860f540..0x13860f547` | 从活动配置 `+0x649` 复制到 `CHIDIOThread + slot*0x2a0 + 0x1d1` |
+| 脉冲入队 | `0x138621620` → `0x1386214c0` | flags 低两位为零时，slot 的 pulse-enable byte 为零则不入队；两位任一置位可绕过这道门禁，不能据此把它当作客户端应伪造的协议位 |
+| work item | `0x138617a90..0x138617b61` | 使用原始 Generic GetInfo `0x138675e00`，Switch 目标发生转换，再调用 abstraction slot 32 |
+| 末端输出 | `0x13867cce0` → `0x13867f7f0` | 仍检查 §22.4 的 writes/enhanced 条件，输出固定 Nintendo 短脉冲 |
+
+11 个路由条件对照覆盖入队开关、flags 和末端 writes/enhanced，4 个配置对照
+执行原始配置应用，并把计算的 enable byte 交给上述原始路由：
+
+| 配置输入 | rumble enable | pulse enable | 后续原生非零包 |
+|---|---|---|---|
+| 当前客户端 caps `0x834bff`、haptics preference=true | true | false | 无 |
+| caps 改为 `0x836bff`（加 `0x2000`）、preference=true | true | true | 有 |
+| 同一 caps、preference=false | true | false | 无 |
+| 不提供 caps override，使用主机 Switch Pro 默认值 | true | false | 无 |
+
+**Conclusion：** 末端 producer 能编码、普通震动成功、Nintendo 身份或静音包
+到达，都不足以证明非零脉冲的完整路由已启用。当前声明没有 `0x2000`，这构成
+能力/配置阻断的具体候选；不能直接将游戏无原生输出归因于游戏本身。
+
+**Boundary / 待验证：** 主机默认 Switch caps 原始表 `0x1386571d0` 对该类型
+也不包含 `0x2000`。不能仅凭新增位使合成配置通过，就判定当前声明违反官方
+契约或应立即改变默认行为。脚本没有执行真实 RemoteHID caps → 活动配置、
+游戏 API adapter/handle 解析、配置载入或线程队列调度；这些输入/连接和锁、
+分配器、时钟、最终 HID 为明确替身。现有默认 caps、真实生效配置及当前 DLL
+版本必须继续核对。此处不改生产能力声明，也不宣称某个 Steam 游戏已提供
+任意频率波形。
+
+公开能力说明还应区分硬件：[当前英文 Steam Input API 文档](https://partner.steamgames.com/doc/api/isteaminput?l=english)
+的 legacy/simple haptic 支持名单为 Steam Controller/Deck；固定二进制仍有
+上述 Switch 分支，两者不能互相替代为完整游戏兼容性证明。
+[Sony 的 PC 手柄支持页](https://www.playstation.com/en-us/pc/pc-accessories/)
+确认 Returnal、Ratchet & Clank: Rift Apart、Spider-Man 系列等的 DualSense
+触觉，但不是 Nintendo 原生效果或 Remote Play 保留该效果的保证。
+
+```sh
+python3 tools/steam-haptics-routing-audit.py --host /path/to/steamclient64.dll \
+  --output build/haptics-routing.json
+```
