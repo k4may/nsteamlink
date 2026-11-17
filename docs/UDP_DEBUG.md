@@ -36,6 +36,9 @@ tools/switch-debugctl.py 10.10.10.17 diag prev
 low/high 幅频参数。环形缓冲上限 512，覆盖递增计数；序号缺口不能当成连续完整
 保真记录。`commands` 等应用计数从应用初始化累计，`source_*` 计数只统计当前
 会话仍打开的 SDL 设备；关闭设备后不能用它恢复已关闭设备的历史。
+`scheduled_samples` 是已选中的原生帧，`emitted_samples` 是系统调用成功提交的
+原生帧；失败或停止时两者不一定相等。`canceled_outputs` 包括发送前被更新命令
+或停止取消的任务。`max_lateness_ns` 观察实际提交相对到期时间的迟到。
 诊断查询只复制内存，不在输出或渲染线程打印或写文件。
 
 ```sh

@@ -104,6 +104,20 @@ static Result io_send(native_io *io, const binding *b, const sl_hd_value values[
 #endif
 }
 static Result emit(native_io *io, const output *o) {
+    if (!o->stop) {
+        pthread_mutex_lock(&lock);
+        const slot *s = &slots[o->slot];
+        bool current = !stopping && s->target.generation == o->target.generation &&
+            s->stream.current.sequence == o->frame.sequence &&
+            s->stream.current.sample == o->frame.sample &&
+            s->stream.current.native == o->frame.native &&
+            s->stream.current.due_ns == o->frame.due_ns;
+        if (!current)
+            ++stats.canceled_outputs;
+        pthread_mutex_unlock(&lock);
+        if (!current)
+            return 0; /* Selected earlier, but never submitted to hardware. */
+    }
     sl_hd_value zero[2] = {{0, 160, 0, 320}, {0, 160, 0, 320}};
     const sl_hd_value *values = o->stop ? zero : o->frame.values;
     uint64_t submitted = now_ns();
@@ -118,19 +132,9 @@ static Result emit(native_io *io, const output *o) {
         stats.io_result = rc;
     }
     slot *s = &slots[o->slot];
-    if (!o->stop && s->target.generation == o->target.generation &&
-        s->stream.current.sequence == o->frame.sequence &&
-        s->stream.current.sample == o->frame.sample) {
-        if (R_FAILED(rc)) {
-            s->stream.dirty = true;
-        } else if (o->frame.native && completed > s->stream.last_sample_ns) {
-            uint64_t shift = completed - s->stream.last_sample_ns;
-            for (unsigned i = 0; i < s->stream.count; ++i)
-                s->stream.queue[(s->stream.head + i) % SL_HAPTIC_QUEUE].due_ns += shift;
-            s->stream.playback_epoch += shift;
-            s->stream.last_sample_ns = completed;
-        }
-    }
+    if (!o->stop)
+        sl_haptic_output_complete(&s->stream, &o->frame, submitted, completed, R_SUCCEEDED(rc),
+                                  s->target.generation == o->target.generation);
     sl_rumble_trace t = {.kind = o->stop ? 3 : 2, .slot = o->slot,
         .received_ns = o->frame.received_ns, .due_ns = o->frame.due_ns,
         .submitted_ns = submitted, .completed_ns = completed, .sequence = o->frame.sequence,

@@ -8,6 +8,7 @@ typedef struct sl_rumble_snapshot {
     sl_haptic_stats stream[8];
     uint64_t sends, send_failures, stop_failures, worker_starts, worker_joins;
     uint64_t trace_overwritten;
+    uint64_t canceled_outputs;
     uint32_t io_result;
     bool worker_running;
 } sl_rumble_snapshot;

@@ -2493,6 +2493,7 @@ static void udp_poll(sl_runtime *r) {
             total.commands += s.stream[i].commands;
             total.native_commands += s.stream[i].native_commands;
             total.decoded_samples += s.stream[i].decoded_samples;
+            total.scheduled_samples += s.stream[i].scheduled_samples;
             total.emitted_samples += s.stream[i].emitted_samples;
             total.rejected += s.stream[i].rejected;
             total.overflows += s.stream[i].overflows;
@@ -2506,19 +2507,20 @@ static void udp_poll(sl_runtime *r) {
             IHS_HIDSDLGetOutputStats(r->session, &q);
         snprintf(reply, sizeof(reply),
             "{\"stage\":\"haptics\",\"commands\":%llu,\"native_commands\":%llu,"
-            "\"decoded_samples\":%llu,\"emitted_samples\":%llu,\"rejected\":%llu,"
+            "\"decoded_samples\":%llu,\"scheduled_samples\":%llu,\"emitted_samples\":%llu,\"rejected\":%llu,"
             "\"overflows\":%llu,\"dropped_samples\":%llu,\"late_samples\":%llu,"
             "\"max_lateness_ns\":%llu,\"sends\":%llu,\"send_failures\":%llu,"
-            "\"stop_failures\":%llu,\"trace_overwritten\":%llu,\"io_rc\":%u,"
+            "\"stop_failures\":%llu,\"canceled_outputs\":%llu,\"trace_overwritten\":%llu,\"io_rc\":%u,"
             "\"source_queued\":%llu,\"source_applied\":%llu,\"source_rejected\":%llu,"
             "\"source_dropped\":%llu,\"source_pending_bytes\":%llu}",
             (unsigned long long)total.commands, (unsigned long long)total.native_commands,
-            (unsigned long long)total.decoded_samples, (unsigned long long)total.emitted_samples,
+            (unsigned long long)total.decoded_samples, (unsigned long long)total.scheduled_samples,
+            (unsigned long long)total.emitted_samples,
             (unsigned long long)total.rejected, (unsigned long long)total.overflows,
             (unsigned long long)total.dropped_samples, (unsigned long long)total.late_samples,
             (unsigned long long)total.max_lateness_ns, (unsigned long long)s.sends,
             (unsigned long long)s.send_failures, (unsigned long long)s.stop_failures,
-            (unsigned long long)s.trace_overwritten, s.io_result,
+            (unsigned long long)s.canceled_outputs, (unsigned long long)s.trace_overwritten, s.io_result,
             (unsigned long long)q.queued, (unsigned long long)q.applied,
             (unsigned long long)q.rejected, (unsigned long long)q.queueDropped,
             (unsigned long long)q.pendingBytes);

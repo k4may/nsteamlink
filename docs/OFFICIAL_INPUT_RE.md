@@ -1283,11 +1283,15 @@ HD 波形，固定 Switch 脉冲分支反而有明确的信息降级。
 所以现有普通输出最后一层并没有经过 devkitPro SDL 震动驱动。只替换
 `SDL_GameControllerRumble`，不能补上它之前拒收的 `0d` 数据。
 
-[SDL 的 Switch HIDAPI 后端](https://github.com/libsdl-org/SDL/blob/68ef6231c08d2336b7f75a58dbb59efbf75349d3/src/joystick/hidapi/SDL_hidapi_switch.c)
+[SDL 3.4.0 的 Switch HIDAPI 后端](https://github.com/libsdl-org/SDL/blob/a962f40bbba175e9716557a25d5d7965f134a3d3/src/joystick/hidapi/SDL_hidapi_switch.c)
 的 `HIDAPI_DriverSwitch_SendJoystickEffect` 接受 10B、report ID 为 `0x10` 的
 完整输出包，保留两组原生 motor data 后调用 `WriteRumble`。因此“SDL 整体
 没有设备专有效果能力”也不成立；应区分通用 rumble API、SendEffect API 与
-Switch 平台 backend 的具体实现。
+Switch 平台 backend 的具体实现。**引用更正：** 原 `68ef6231…` 链接无法核验，
+撤回其作为已核验固定源码的引用，改用已从官方 tag 和 commit 获取的上述源码。
+[SDL 2.32.4 对应函数](https://github.com/libsdl-org/SDL/blob/2359383fc187386204c3bb22de89655a494cd128/src/joystick/hidapi/SDL_hidapi_switch.c)
+仍返回 Unsupported，不能把 SDL3 能力外推到本项目 SDL2 平台。这里用 SDL3
+作为能力实例，不据此认定固定官方 Steam Link 捆绑的 SDL 版本。
 
 libnx 的 `HidVibrationValue` 为每个 actuator 提供两组频率/振幅，
 `hidSendVibrationValues` 直接转交 `hid` IPC 206；不是把参数变成双路强度。
@@ -1368,7 +1372,8 @@ python3 tools/steam-rumble-host-audit.py \
 或其他增强处理。该资料是外部研究证据，不是本项目 HOS IPC 或马达的实测。
 
 `haptic_stream.c` 保留每包全部样本和接收时间间隔，按单调绝对期限调度。
-输出过晚时延后后续样本并记账，禁止把多个过期样本瞬间发完或只取首样本。
+输出过晚时只延后与前次实际输出间距不足的样本，原有空闲间隔吸收延迟后恢复
+源时间轴；不平移整个源时间基准。禁止把多个过期样本瞬间发完或只取首样本。
 96 帧队列溢出明确报错并统计丢样；已经收到的有效压缩状态仍推进，避免后续
 相对编码永久漂移。接收队列本身丢包时无法补造源状态，必须按计数判为保真失败。
 普通命令显式替换待播原生序列，普通持续时间到期发零；原生最后值维持到下一
@@ -1377,7 +1382,9 @@ python3 tools/steam-rumble-host-audit.py \
 `switch/rumble.c` 在 SDL owner 上定位和激活设备，输出 worker 只持有复制的
 原生 handles 和参数，通过自己打开的 `hid` service 发送 IPC 206；不进入 SDL、
 全局 libnx HID session 或日志回调。每次成功提交完成后，下一帧至少间隔 5ms，
-IPC 等待造成的额外时差保留在 trace。设备切换先向旧 binding 发零，失败重试；
+IPC 等待造成的额外时差保留在 trace。已选中但尚未提交的任务在发送前重新检查
+binding、命令和停止状态；取消的任务不再进入 HID，已在途调用完成后必须停旧
+binding。设备切换先向旧 binding 发零，失败重试；
 退出按 stop → join → close 顺序，停止失败单独计数，不能解释为已停止。
 
 诊断构建保留有界 512 条命令/提交记录和递增 serial，覆盖即计数。应用的只读
@@ -1405,7 +1412,10 @@ blob hash，只在忽略的 build 目录构建独立参考进程。其 GPL-2.0-o
 主机。活动期间将提交与读回存入内存，worker join 后才批量发送高频诊断。
 读回同时记录调用前后时间；跨越下一次提交的读回不能算某一短样本的证明。
 主机分析器使用独立参考进程重新解码原包；缺命令、丢样、错序、参数错误、
-停止/清理失败均拒绝软件通过；样本间隔误差超过 500µs 或读回不全另外失败。
+停止/清理失败均拒绝软件通过；检查跨包全局顺序、显式停止与最终清理的各自结果。
+包内样本间隔或相对接收时间轴的误差超过 500µs、或读回不全，另外失败。
+带部署的调用保留 nxlink 返回码和超时，收集失败时即使局部软件记录通过，也不
+以零退出码宣称整次验证通过。
 500µs 是验证工具的观察阈值，不是控制器规范，也不改变生产调度。
 负向对照专门检查这些失败条件，缺日志不能变成通过。
 
@@ -1424,3 +1434,40 @@ python3 tools/switch-haptics-probe.py --log build/haptics-device.log
 `physical_fidelity_verified=true` 或 `loader_return_verified=true`。验证设施和
 可交叉编译的输出实现不等于已完成真机验收；某个游戏是否发原生包必须看该会话
 的实际 trace。任务验收及尚缺实测只记录在 GitHub Issue，不在参考文档维护进度。
+
+### 22.7 调度与验证反例的更正
+
+**Evidence：** `4c14981` 的 `sl_haptic_advance` 把每次唤醒迟到加到
+`playback_epoch`，`emit` 又把 IPC 时长加到同一源时间基准。以 50ms 包间隔
+发送 100 个三采样脉冲，每个样本模拟迟到 100µs，得到源时间基准累计偏移
+30ms；即使空闲间隔足够也不恢复。旧验证器只检查包内 5ms 间隔，不能拦截
+这样的跨包偏移。`test_haptic_stream.c` 的连续包和预入队间隔反例约束此行为：
+只推迟实际冲突的待播帧，后续空闲间隔吸收迟到和 IPC 耗时，源锚点固定。
+
+**Evidence：** `test_rumble.c` 的双设备阻塞 IPC 反例确认：停止会话时，旧
+worker 仍会发送本批次中后一个尚未提交的非零任务。发送前的世代/命令/停止
+检查取消这些任务，`canceled_outputs` 单独计数；无法把已进入 IPC 的调用撤回，
+其返回后的旧 binding 零输出仍是必需步骤。
+
+**Retraction：** 撤回将旧 `emitted_samples` 解释为系统成功提交样本数的说法。
+它原来在出队、尚未调用系统时就增加。`scheduled_samples` 现在表示出队选择，
+`emitted_samples` 仅计成功的原生提交；失败重试、取消和迟到分别观察，迟到以
+实际提交时刻而非本批任务被选择的时刻计算。接收时间也在等待 SDL 设备锁之前
+获取，锁等待不应消失在接收间隔/交付延迟的证据中。
+
+**Evidence：** 普通命令与后续原生包在同一 owner drain 批次应用时，旧实现从
+原生包重新建立时间锚点，导致两者之间的接收间隔消失，并立即取消普通到期
+停止。`test_haptic_stream.c` 增加 10ms 普通震动后接 5ms/50ms 原生包的反例。
+普通输出也建立接收锚点；播放到期与源时间上的解码状态到期分别处理。普通
+先到期时不清除未来的原生帧，原生先播放时取消旧普通计时器；零采样的另一侧
+重复到期后的解码状态，避免恢复已经停止的普通强度。
+
+**Evidence：** `test_haptics_verifier.py` 增加整包错序、跨包累积偏移、显式停止
+非零、单 actuator 覆盖不足和收集失败/超时的反例。显式停止与退出清理分别
+检查；后续任意输出之后的读回不能再用于证明前一个样本。
+
+**Boundary：** 固定 5ms 最小保持时间优先保留所有样本。无空闲的持续满载输入
+遇到 IPC 耗时或调度迟到仍可能积压、延迟甚至溢出，不能据此实现宣称硬实时
+200Hz；这些是应从 trace 验证的限制，不以源时间基准漂移掩盖，也不靠瞬间
+补发样本隐藏。普通 `0x01` 的线性映射及其与任意相对原生包混用的 PC SDL
+逐位等价性，仍没有由纯原生解码对照证明。

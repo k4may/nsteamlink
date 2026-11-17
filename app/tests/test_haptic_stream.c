@@ -30,9 +30,11 @@ int main(void) {
     sl_haptic_init(&s);
     assert(sl_haptic_command(&s, pulse, 69, start, start, false));
     assert(sl_haptic_advance(&s, start + 100000000, &f));
+    sl_haptic_output_complete(&s, &f, start + 100000000, start + 100100000, true, true);
     assert(f.sample == 0 && s.stats.late_samples == 1);
     assert(!sl_haptic_advance(&s, start + 100000000, &f));
-    assert(sl_haptic_advance(&s, start + 105000000, &f));
+    assert(!sl_haptic_advance(&s, start + 105000000, &f));
+    assert(sl_haptic_advance(&s, start + 105100000, &f));
     assert(f.sample == 1 && f.values[1].amp_low > 0);
 
     /* Invalid packets do not advance state. Playback overflow still consumes
@@ -86,5 +88,80 @@ int main(void) {
     sl_haptic_stop(&s, start + 51000000);
     assert(s.count == 0 && sl_haptic_advance(&s, start + 51000000, &f));
     assert(f.values[0].amp_low == 0 && f.values[1].amp_low == 0);
+
+    /* A little wake jitter must be absorbed by the idle gap, not accumulate
+     * into a growing delay on every subsequent packet. */
+    sl_haptic_init(&s);
+    for (unsigned packet = 0; packet < 100; ++packet) {
+        uint64_t source = start + packet * UINT64_C(50000000);
+        assert(sl_haptic_command(&s, pulse, 69, source, source, false));
+        assert(sl_haptic_deadline(&s) == source);
+        for (unsigned sample = 0; sample < 3; ++sample) {
+            assert(sl_haptic_advance(&s, sl_haptic_deadline(&s) + 100000, &f));
+            uint64_t submitted = f.due_ns + 100000;
+            sl_haptic_output_complete(&s, &f, submitted, submitted + 200000, true, true);
+        }
+    }
+
+    /* Already queued packets retain their source gap after a late first
+     * packet, as long as the gap can absorb the delay. */
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, pulse, 69, start, start, false));
+    assert(sl_haptic_command(&s, pulse, 69, start + 50000000, start, false));
+    for (unsigned sample = 0; sample < 3; ++sample)
+        assert(sl_haptic_advance(&s, start + 2000000 + sample * 5000000, &f));
+    assert(sl_haptic_deadline(&s) == start + 50000000);
+
+    /* Selected is not emitted. A slow/failed IPC contributes real lateness
+     * and only a successful retry counts as an emitted native sample. */
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, pulse, 69, start, start, false));
+    assert(sl_haptic_advance(&s, start, &f));
+    assert(s.stats.scheduled_samples == 1 && s.stats.emitted_samples == 0);
+    sl_haptic_output_complete(&s, &f, start + 2000000, start + 3000000, false, true);
+    assert(s.stats.emitted_samples == 0 && s.stats.max_lateness_ns == 2000000);
+    assert(sl_haptic_advance(&s, start + 4000000, &f));
+    sl_haptic_output_complete(&s, &f, start + 4000000, start + 5000000, true, true);
+    assert(s.stats.emitted_samples == 1 && s.stats.scheduled_samples == 1);
+    assert(sl_haptic_deadline(&s) == start + 10000000);
+
+    /* A batched ordinary -> native transition retains its received gap.
+     * The ordinary 10ms expiry still occurs before the native packet at 50ms,
+     * without clearing its already decoded samples. */
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
+    assert(sl_haptic_command(&s, pulse, 69, start + 50000000, start, true));
+    assert(sl_haptic_advance(&s, start, &f) && !f.native && f.values[0].amp_low == 1);
+    assert(!sl_haptic_advance(&s, start + 9999999, &f));
+    assert(sl_haptic_advance(&s, start + 10000000, &f) && !f.native && f.values[0].amp_low == 0);
+    assert(s.count == 3);
+    assert(!sl_haptic_advance(&s, start + 49999999, &f));
+    assert(sl_haptic_advance(&s, start + 50000000, &f) && f.native && f.sample == 0);
+
+    /* An early native packet supersedes the old ordinary expiry; its middle
+     * sample must not get erased when that old timer would have elapsed. */
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
+    assert(sl_haptic_command(&s, pulse, 69, start + 5000000, start, true));
+    assert(sl_haptic_advance(&s, start, &f) && !f.native);
+    assert(sl_haptic_advance(&s, start + 5000000, &f) && f.native && f.sample == 0);
+    assert(sl_haptic_advance(&s, start + 10000000, &f) && f.native && f.sample == 1);
+
+    /* A zero-sample motor repeats the wire state after source-time expiry,
+     * not the old ordinary strength that is still awaiting playback. */
+    uint8_t repeat[69] = {13, 10, 0, 0, 0, 16};
+    for (unsigned i = 0; i < 4; ++i)
+        repeat[11 + i] = (uint8_t)(hold >> (i * 8));
+    for (unsigned expired = 0; expired < 2; ++expired) {
+        sl_haptic_init(&s);
+        uint64_t gap = expired ? 50000000 : 5000000;
+        assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
+        assert(sl_haptic_command(&s, repeat, 69, start + gap, start, true));
+        assert(sl_haptic_advance(&s, start, &f) && !f.native);
+        if (expired)
+            assert(sl_haptic_advance(&s, start + 10000000, &f) && !f.native);
+        assert(sl_haptic_advance(&s, start + gap, &f) && f.native);
+        assert(f.values[0].amp_low == (expired ? 0 : 1));
+    }
     puts("PASS native pulse preservation, absolute deadlines, late scheduling, gaps, overflow and stop");
 }

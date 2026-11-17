@@ -45,7 +45,9 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
         float low = le16(b + 1) / 65535.0f, high = le16(b + 3) / 65535.0f;
         uint32_t ms = le32(b + 5);
         s->count = s->head = 0;
-        s->native_epoch = false;
+        s->source_epoch = received;
+        s->playback_epoch = now;
+        s->source_epoch_valid = true;
         ++s->stats.commands;
         s->current = (sl_haptic_frame){.values = {{low, 160, high, 320},
                                                   {low, 160, high, 320}},
@@ -57,16 +59,25 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
         seed(&s->decoder[0], &s->current.values[0]);
         seed(&s->decoder[1], &s->current.values[1]);
         s->expires_ns = ms && (low || high) ? now + (uint64_t)ms * 1000000 : 0;
+        s->wire_expires_ns = ms && (low || high) ? received + (uint64_t)ms * 1000000 : 0;
         s->dirty = true;
         return true;
     }
     if (b[0] != 13 || size != 69 || le32(b + 1) != 10)
         goto reject;
     sl_hd_state decoded[2] = {s->decoder[0], s->decoder[1]};
+    /* Wire decode follows source time even when owner drain batches packets.
+     * A later relative packet must not inherit an already expired rumble. */
+    if (s->wire_expires_ns && received >= s->wire_expires_ns) {
+        sl_hd_reset(&decoded[0]);
+        sl_hd_reset(&decoded[1]);
+    }
     sl_hd_samples samples[2];
     if (!sl_hd_report(decoded, b + 5, 10, samples))
         goto reject;
     unsigned count = samples[0].count > samples[1].count ? samples[0].count : samples[1].count;
+    if (count || (s->wire_expires_ns && received >= s->wire_expires_ns))
+        s->wire_expires_ns = 0;
     if (s->count + count > SL_HAPTIC_QUEUE) {
         ++s->stats.overflows;
         s->stats.dropped_samples += count;
@@ -82,10 +93,10 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
     }
     ++s->stats.commands;
     ++s->stats.native_commands;
-    if (!s->native_epoch) {
+    if (!s->source_epoch_valid) {
         s->source_epoch = received;
         s->playback_epoch = now;
-        s->native_epoch = true;
+        s->source_epoch_valid = true;
     }
     uint64_t due = s->playback_epoch + (received > s->source_epoch ? received - s->source_epoch : 0);
     if (due < now)
@@ -98,8 +109,8 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
             due = end + SL_HAPTIC_SAMPLE_NS;
     }
     sl_hd_value hold[2];
-    sl_hd_current(&s->decoder[0], &hold[0]);
-    sl_hd_current(&s->decoder[1], &hold[1]);
+    sl_hd_current(&decoded[0], &hold[0]);
+    sl_hd_current(&decoded[1], &hold[1]);
     for (unsigned i = 0; i < count; ++i) {
         sl_haptic_frame f = {.due_ns = due + i * SL_HAPTIC_SAMPLE_NS,
             .received_ns = received, .sequence = s->stats.commands, .sample = i, .native = true};
@@ -111,16 +122,63 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *b, size_t size,
     }
     memcpy(s->decoder, decoded, sizeof(decoded));
     s->stats.decoded_samples += count;
-    s->expires_ns = 0;
     return true;
 reject:
     ++s->stats.rejected;
     return false;
 }
 
+static void space_pending(sl_haptic_stream *s, uint64_t after) {
+    uint64_t next = after + SL_HAPTIC_SAMPLE_NS;
+    for (unsigned i = 0; i < s->count; ++i) {
+        sl_haptic_frame *f = &s->queue[(s->head + i) % SL_HAPTIC_QUEUE];
+        if (f->due_ns >= next)
+            break; /* An original source gap absorbs the accumulated delay. */
+        f->due_ns = next;
+        next += SL_HAPTIC_SAMPLE_NS;
+    }
+}
+
+void sl_haptic_output_complete(sl_haptic_stream *s, const sl_haptic_frame *f,
+                               uint64_t submitted, uint64_t completed, bool success,
+                               bool current_binding) {
+    if (f->native) {
+        uint64_t late = submitted > f->due_ns ? submitted - f->due_ns : 0;
+        if (late > s->stats.max_lateness_ns)
+            s->stats.max_lateness_ns = late;
+        if (success) {
+            ++s->stats.emitted_samples;
+            if (late >= 1000000)
+                ++s->stats.late_samples;
+        }
+    }
+    if (!current_binding || s->current.sequence != f->sequence || s->current.sample != f->sample ||
+        s->current.native != f->native || s->current.due_ns != f->due_ns)
+        return; /* A newer command superseded the in-flight output. */
+    if (!success) {
+        s->dirty = true;
+    } else if (f->native) {
+        if (completed > s->last_sample_ns)
+            s->last_sample_ns = completed;
+        space_pending(s, s->last_sample_ns);
+    }
+}
+
 bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) {
-    if (s->expires_ns && now >= s->expires_ns)
-        sl_haptic_stop(s, now);
+    if (s->expires_ns && now >= s->expires_ns) {
+        /* Expire the ordinary value without destroying future native frames
+         * already decoded from a later source packet. */
+        s->current = (sl_haptic_frame){.values = {silence(), silence()},
+            .due_ns = s->expires_ns, .received_ns = s->current.received_ns,
+            .sequence = s->current.sequence};
+        if (s->wire_expires_ns) {
+            sl_hd_reset(&s->decoder[0]);
+            sl_hd_reset(&s->decoder[1]);
+            s->wire_expires_ns = 0;
+        }
+        s->expires_ns = 0;
+        s->dirty = true;
+    }
     if (s->dirty) {
         s->dirty = false;
         *out = s->current;
@@ -129,20 +187,12 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
     if (!s->count || s->queue[s->head].due_ns > now)
         return false;
     s->current = s->queue[s->head];
+    s->expires_ns = 0; /* A native output supersedes the old ordinary timer. */
     s->head = (s->head + 1) % SL_HAPTIC_QUEUE;
     --s->count;
-    uint64_t late = now - s->current.due_ns;
-    if (late > s->stats.max_lateness_ns)
-        s->stats.max_lateness_ns = late;
-    if (late >= 1000000)
-        ++s->stats.late_samples;
-    if (late) {
-        for (unsigned i = 0; i < s->count; ++i)
-            s->queue[(s->head + i) % SL_HAPTIC_QUEUE].due_ns += late;
-        s->playback_epoch += late;
-    }
-    ++s->stats.emitted_samples;
+    ++s->stats.scheduled_samples;
     s->last_sample_ns = now;
+    space_pending(s, now);
     *out = s->current;
     return true;
 }

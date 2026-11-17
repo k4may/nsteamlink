@@ -13,6 +13,8 @@ int __wrap_SDL_GameControllerRumble(SDL_GameController *, Uint16, Uint16, Uint32
 static u32 styles[33];
 static bool connected = true;
 static atomic_uint send_error;
+static atomic_uint call_number, block_call, blocked_call, stale_nonzero;
+static int controllers = 1;
 static Result init_error;
 static HidNpadIdType destination;
 static unsigned initializes;
@@ -23,7 +25,7 @@ static unsigned last_count;
 SDL_Joystick *SDL_GameControllerGetJoystick(SDL_GameController *c) { return (SDL_Joystick *)c; }
 SDL_JoystickID SDL_JoystickInstanceID(SDL_Joystick *j) { return (int)(uintptr_t)j - 1; }
 SDL_Joystick *SDL_JoystickFromInstanceID(SDL_JoystickID id) {
-    return connected && id == 0 ? (SDL_Joystick *)1 : NULL;
+    return connected && id >= 0 && id < controllers ? (SDL_Joystick *)(uintptr_t)(id + 1) : NULL;
 }
 u32 hidGetNpadStyleSet(HidNpadIdType id) { return styles[id]; }
 Result hidInitializeVibrationDevices(HidVibrationDeviceHandle *h, int n, HidNpadIdType id,
@@ -36,7 +38,16 @@ Result hidInitializeVibrationDevices(HidVibrationDeviceHandle *h, int n, HidNpad
     return init_error;
 }
 Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrationValue *v, int n) {
-    (void)h;
+    unsigned call = atomic_fetch_add(&call_number, 1) + 1;
+    if (atomic_load(&block_call) == call) {
+        atomic_store(&blocked_call, call);
+        while (atomic_load(&block_call) == call) {
+            struct timespec pause = {.tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
+    }
+    if (h[0].type_value == 2 && (v[0].amp_low || v[0].amp_high))
+        atomic_fetch_add(&stale_nonzero, 1);
     for (int i = 0; i < n; ++i) {
         assert(isfinite(v[i].amp_low) && v[i].amp_low >= 0 && v[i].amp_low <= 1);
         assert(isfinite(v[i].amp_high) && v[i].amp_high >= 0 && v[i].amp_high <= 1);
@@ -65,6 +76,14 @@ static void await_sends(uint64_t n) {
         pause_ms(1);
     }
     assert(!"worker did not produce expected output");
+}
+static void await_block(unsigned call) {
+    for (unsigned i = 0; i < 500; ++i) {
+        if (atomic_load(&blocked_call) == call)
+            return;
+        pause_ms(1);
+    }
+    assert(!"mock IPC did not reach the concurrency barrier");
 }
 static int rumble(unsigned low, unsigned high, unsigned ms) {
     return __wrap_SDL_GameControllerRumble((SDL_GameController *)1, low, high, ms);
@@ -153,5 +172,28 @@ int main(void) {
     sl_rumble_shutdown();
     s = snapshot();
     assert(!s.worker_running && s.worker_starts == s.worker_joins);
+
+    /* Hold one IPC so the following iteration selects both slots. While
+     * slot 0's next IPC is in flight, cancel the session: slot 1's selected
+     * but not yet submitted nonzero output must never reach HID. */
+    controllers = 2;
+    styles[1] = HidNpadStyleTag_NpadFullKey;
+    atomic_store(&call_number, 0);
+    atomic_store(&block_call, 1);
+    atomic_store(&blocked_call, 0);
+    atomic_store(&stale_nonzero, 0);
+    assert(sl_rumble_init());
+    assert(rumble(65535, 0, 0) == 0);
+    await_block(1);
+    assert(rumble(32768, 0, 0) == 0);
+    const uint8_t ordinary[9] = {1, 255, 255};
+    assert(sl_rumble_command(1, ordinary, sizeof(ordinary), 0, NULL) == 0);
+    atomic_store(&block_call, 2);
+    await_block(2);
+    sl_rumble_tick(false);
+    atomic_store(&block_call, 0);
+    sl_rumble_shutdown();
+    assert(atomic_load(&stale_nonzero) == 0);
+    assert(snapshot().canceled_outputs == 1);
     puts("PASS native output worker, three-sample pulse, expiry, device changes, retry and join");
 }

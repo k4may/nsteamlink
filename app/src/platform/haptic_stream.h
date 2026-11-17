@@ -12,7 +12,7 @@ typedef struct sl_haptic_frame {
 } sl_haptic_frame;
 
 typedef struct sl_haptic_stats {
-    uint64_t commands, native_commands, decoded_samples, emitted_samples;
+    uint64_t commands, native_commands, decoded_samples, scheduled_samples, emitted_samples;
     uint64_t rejected, overflows, dropped_samples, late_samples, max_lateness_ns;
 } sl_haptic_stats;
 
@@ -21,8 +21,8 @@ typedef struct sl_haptic_stream {
     sl_hd_state decoder[2];
     sl_haptic_frame current, queue[SL_HAPTIC_QUEUE];
     unsigned head, count;
-    uint64_t expires_ns, source_epoch, playback_epoch, last_sample_ns;
-    bool dirty, native_epoch;
+    uint64_t expires_ns, wire_expires_ns, source_epoch, playback_epoch, last_sample_ns;
+    bool dirty, source_epoch_valid;
     sl_haptic_stats stats;
 } sl_haptic_stream;
 
@@ -35,4 +35,10 @@ bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *command, size_t size,
  * or emitted back-to-back as a burst. Lateness is retained as failed timing
  * evidence in stats rather than disguised as an on-time output. */
 bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out);
+/* Account actual IPC attempt timing/results, then enforce spacing from a
+ * successful completion. Stale bindings still contribute actual output stats
+ * but cannot mutate the replacement binding's playback state. */
+void sl_haptic_output_complete(sl_haptic_stream *s, const sl_haptic_frame *frame,
+                               uint64_t submitted_ns, uint64_t completed_ns, bool success,
+                               bool current_binding);
 uint64_t sl_haptic_deadline(const sl_haptic_stream *s);

@@ -181,13 +181,18 @@ cleanup:
     IHS_HIDSDLOutputStats output = {0};
     if (session)
         IHS_HIDSDLGetOutputStats(session, &output);
-    log_line("{\"stage\":\"joined\",\"running\":%s,\"starts\":%llu,\"joins\":%llu,\"sends\":%llu,\"failures\":%llu,\"io_rc\":%u,\"queued\":%llu,\"applied\":%llu,\"rejected\":%llu,\"dropped\":%llu,\"trace_lost\":%llu}",
+    log_line("{\"stage\":\"joined\",\"running\":%s,\"starts\":%llu,\"joins\":%llu,\"sends\":%llu,\"failures\":%llu,\"io_rc\":%u,\"queued\":%llu,\"applied\":%llu,\"rejected\":%llu,\"dropped\":%llu,\"trace_lost\":%llu,\"decoded\":%llu,\"scheduled\":%llu,\"emitted\":%llu,\"stream_rejected\":%llu,\"stream_dropped\":%llu}",
         snapshot.worker_running ? "true" : "false", (unsigned long long)snapshot.worker_starts,
         (unsigned long long)snapshot.worker_joins, (unsigned long long)snapshot.sends,
         (unsigned long long)snapshot.send_failures, snapshot.io_result,
         (unsigned long long)output.queued, (unsigned long long)output.applied,
         (unsigned long long)output.rejected, (unsigned long long)output.queueDropped,
-        (unsigned long long)snapshot.trace_overwritten);
+        (unsigned long long)snapshot.trace_overwritten,
+        (unsigned long long)snapshot.stream[0].decoded_samples,
+        (unsigned long long)snapshot.stream[0].scheduled_samples,
+        (unsigned long long)snapshot.stream[0].emitted_samples,
+        (unsigned long long)snapshot.stream[0].rejected,
+        (unsigned long long)snapshot.stream[0].dropped_samples);
     for (size_t i = 0; i < n; ++i) {
         sl_rumble_trace *t = &trace[i];
         if (t->kind == 1) {
