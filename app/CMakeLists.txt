@@ -1496,6 +1496,16 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-haptics-probe-host COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_probe_host.py" --probe $<TARGET_FILE:nsl-haptics-probe-host>)
     set_tests_properties(nsl-haptics-probe-host PROPERTIES TIMEOUT 15)
+    add_executable(nsl-haptics-calibration-host tests/test_haptics_probe_host.c platforms/switch/rumble.c
+        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+    target_include_directories(nsl-haptics-calibration-host PRIVATE src tests/fakes)
+    target_compile_definitions(nsl-haptics-calibration-host PRIVATE NSL_RUMBLE_TEST=1
+        NSL_HAPTICS_PROBE_HOST=1 NSL_HAPTICS_CALIBRATION_HOST=1 NSL_DIAGNOSTICS=1)
+    target_compile_options(nsl-haptics-calibration-host PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-haptics-calibration-host PRIVATE PkgConfig::SDL2 Threads::Threads m)
+    add_test(NAME nsl-haptics-calibration-host COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_calibration.py" --probe $<TARGET_FILE:nsl-haptics-calibration-host>)
+    set_tests_properties(nsl-haptics-calibration-host PROPERTIES TIMEOUT 15)
     add_executable(nsl-haptic-stream-tests tests/test_haptic_stream.c
         platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
     target_include_directories(nsl-haptic-stream-tests PRIVATE src)
@@ -1755,6 +1765,17 @@ if(NSL_PLATFORM STREQUAL "switch")
         Threads::Threads nx m)
     nx_generate_nacp(OUTPUT haptics_probe.nacp NAME "NSteamLink Haptics Probe" AUTHOR "NSteamLink" VERSION "1.0.0")
     nx_create_nro(nsl-haptics-probe OUTPUT nsl-haptics-probe.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/haptics_probe.nacp")
+
+    if(NSL_BUILD_TOOLS AND NSL_DIAGNOSTICS)
+        add_executable(nsl-haptics-calibration tests/switch_haptics_calibration.c platforms/switch/rumble.c
+            platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        target_include_directories(nsl-haptics-calibration PRIVATE src)
+        target_compile_definitions(nsl-haptics-calibration PRIVATE NSL_DIAGNOSTICS=1)
+        target_compile_options(nsl-haptics-calibration PRIVATE -Wall -Wextra)
+        target_link_libraries(nsl-haptics-calibration PRIVATE PkgConfig::SDL2 Threads::Threads nx m)
+        nx_generate_nacp(OUTPUT haptics_calibration.nacp NAME "NSteamLink Haptics Calibration" AUTHOR "NSteamLink" VERSION "1.0.0")
+        nx_create_nro(nsl-haptics-calibration OUTPUT nsl-haptics-calibration.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/haptics_calibration.nacp")
+    endif()
 
     # On-screen guided visualizer for manual axis/sign checks.
     add_executable(nsl-sixaxis-view tests/switch_sixaxis_view.c platforms/common/sensor_math.c)

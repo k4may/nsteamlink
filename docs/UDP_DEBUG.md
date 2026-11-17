@@ -52,6 +52,23 @@ python3 tools/capture-switch-haptics.py --seconds 30 --output build/game-haptics
 尚未收到原生命令，不能据此认定手柄不支持 HD。包/IPC 记录均不证明实际马达
 频谱；分层验证、自动部署夹具及物理测量边界见 `OFFICIAL_INPUT_RE.md` §22。
 
+若原生样本提交与参数对照通过，但系统读回不同，诊断构建的
+`nsl-haptics-calibration.nro` 可在同一次运行比较 libnx 单侧 IPC 201、双侧 IPC
+206 和生产输出线程的 IPC 206。程序包含全部刺激，无需 SD 文件；约两秒测量，
+随后自动停止、join 并收集日志。只在用户确认 netloader 就绪后部署一次：
+
+```sh
+python3 tools/switch-haptics-calibration.py --address <本次确认的Switch地址> \
+  --nro build/switch/app/nsl-haptics-calibration.nro \
+  --log build/haptic-calibration.log --output build/haptic-calibration.json
+# 仅重新分析已有日志，不部署：
+python3 tools/switch-haptics-calibration.py --log build/haptic-calibration.log \
+  --output build/haptic-calibration-reanalysis.json
+```
+
+对照完成只表示诊断记录完整。长保持值一致不能替代原生夹具的严格 5ms 验收，
+也不证明马达波形或返回 hbmenu；具体刺激与判定边界见协议参考 §22.9。
+
 ## 自包含真实主机会话测试
 
 诊断构建单独生成 `nsl-live-media-probe.nro`；普通发布构建不包含此测试入口。

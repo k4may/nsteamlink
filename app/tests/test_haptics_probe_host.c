@@ -2,7 +2,11 @@
  * applet and nxlink terminals are simulated. The begin record explicitly
  * identifies this as host simulation, never as real Switch IPC evidence. */
 #define main sl_haptics_fixture_main
+#ifdef NSL_HAPTICS_CALIBRATION_HOST
+#include "switch_haptics_calibration.c"
+#else
 #include "switch_haptics_probe.c"
+#endif
 #undef main
 #include <assert.h>
 #include <pthread.h>
@@ -70,6 +74,26 @@ Result hidGetActualVibrationValue(HidVibrationDeviceHandle h, HidVibrationValue 
     pthread_mutex_unlock(&host_hid_lock);
     return 0;
 }
+#ifdef NSL_HAPTICS_CALIBRATION_HOST
+u32 hosversionGet(void) { return 0; }
+Result hidGetNpadInterfaceType(HidNpadIdType id, u8 *interface) {
+    (void)id; *interface = 2; return 0;
+}
+Result hidGetVibrationDeviceInfo(HidVibrationDeviceHandle h, HidVibrationDeviceInfo *info) {
+    *info = (HidVibrationDeviceInfo){.type = 1, .position = h.type_value + 1};
+    return 0;
+}
+Result hidIsVibrationDeviceMounted(HidVibrationDeviceHandle h, bool *mounted) {
+    (void)h; *mounted = true; return 0;
+}
+Result hidSendVibrationValue(HidVibrationDeviceHandle h, const HidVibrationValue *v) {
+    assert(h.type_value < 2);
+    pthread_mutex_lock(&host_hid_lock);
+    host_values[h.type_value] = *v;
+    pthread_mutex_unlock(&host_hid_lock);
+    return 0;
+}
+#endif
 int main(int argc, char **argv) {
     assert(SDL_Init(SDL_INIT_GAMECONTROLLER) == 0);
     assert(SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, 6, 16, 0) == 0);
