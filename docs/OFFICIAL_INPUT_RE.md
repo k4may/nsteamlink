@@ -1667,3 +1667,67 @@ DLL/SHA，在离线执行原始指令，而不从静音包或普通震动推断�
 python3 tools/steam-haptics-routing-audit.py --host /path/to/steamclient64.dll \
   --output build/haptics-routing.json
 ```
+
+### 22.11 当前 Windows Host 文件与默认布局核对（2026-11-18）
+
+**Evidence / 用户资料：** 用户确认本次使用默认手柄布局，并提供当前
+`steamclient64.dll`、`controller.txt`、`streaming_log.txt`。DLL SHA-256 为
+`669fa08e259277fbf5a1dfe15ce88afe734e89151194304b44d92f418dcc985b`，
+FileVersion `11.23.65.88`，PE timestamp `2026-11-13 02:02:02 UTC`。
+它与 §20.1 固定 DLL 不同；不能沿用旧版代码地址或对象布局。
+
+`controller.txt` 的本次记录为：
+
+- 第 35060–35070 行：`2026-11-18 00:50:46`，远程 `sdl://0`、
+  `057e:2009`，产品名 `Nintendo Switch Pro Controller`，设备打开并保留
+  XInput slot 0。
+- 第 35088–35099 行：AppId `1049320` 的 warmed config 多次记录
+  `Controller 0 uses xinput : true`，随后排队激活该游戏配置。
+- `streaming_log.txt` 第 11120–11129 行确认本次游戏为 `River City Girls`；
+  第 11243 行起的 SessionStats 同时记录 `GameControllerVID=1406`、
+  `GameControllerPID=8201`（十六进制为 `057e:2009`）。
+
+**Conclusion / 实际会话：** 游戏采用 XInput 映射，与 §22.10 设备端捕获的
+84 条普通命令、零条非零原生效果一致。不能把“游戏侧 XInput 映射”与
+“远程硬件被误报为 Xbox”混为一谈；这里远程身份是 Nintendo。默认布局和
+这些日志都没有记录最终 caps override、haptics preference 或游戏每次 API
+调用，因此也不能从它们推断全局触觉偏好或脉冲门禁已打开。
+
+**Evidence / 新版原始指令：** 对上述 SHA 单独定位 RTTI/vtable、函数和字段，
+扩充 `tools/steam-haptics-routing-audit.py`。两份 DLL 各执行 20 个路由条件与
+4 个配置条件，均通过；配置/对象地址不同，不能用统一地址平移代替重定位。
+
+| 阶段 | 当前 DLL 地址或字段 | 直接观察 |
+|---|---|---|
+| 缓存信息到活动配置 | `0x13860485d..0x138604897` | 原始复制片段将 supplied cache-info `+0x38` 写到 config `+0x240`；该片段的缓存来源和选择仍是合成输入 |
+| 活动配置应用 | `0x13867e0b0..0x13867e2cd` | config `+0x240` 或类型 `+0x230` 的默认 caps，仍要求 `0x2000` 与 preferences `+0xd4`；结果写入 `+0x661`；普通 rumble 使用独立 `+0x660` |
+| 配置到 IO slot | `0x13862520e..0x13862521d` | 原始复制片段将 config `+0x661` 写到 slot `+0x1d1`；另一静态复制点为 `0x1386259a0` |
+| SteamInput006 legacy pulse adapter/core | `0x138738510` → `0x138637ac0` | 原始 adapter、core 与内部入队路径执行；handle lookup、锁与外部运行环境为替身；无效合成 handle 不入队 |
+| 脉冲入队与 work item | `0x138637920` → `0x13862df10` | slot 门禁仍独立于普通震动；flags=0 时关闭则不入队 |
+| Nintendo 原生输出 | `0x1386953e0` → `0x138697ef0` | 能生成含非零原生效果的 69B `0x0d` 包；关闭末端 writes/enhanced 时不输出 |
+
+当前 caps `0x834bff`、偏好开启时普通震动为 true、pulse 为 false；
+`0x836bff` 且偏好开启时 pulse 为 true 并生成非零包；关闭偏好又恢复为
+false。当前 Host 的默认 Switch caps 仍为 `0x24814bff`，也没有 `0x2000`。
+当前 DLL 的 API adapter 正对照还核验 duration `1`、`1000`、`65535`：
+同一目标的非零效果包逐字节相同，重现 §22.2 的固定短脉冲降级。
+
+**Conclusion / 能力范围：** 当前 Host 仍有 Nintendo 原生短脉冲分支；
+我们目前的声明不能打开这道常规 pulse 门禁。这是具体能力缺口候选，不能
+把本次只有普通震动直接归咎于游戏。反过来，加能力位只会允许已有的脉冲
+调用通过；它不使只提供普通强度的游戏凭空生成频率/波形，也不使这条固定
+短脉冲分支成为任意 HD 波形输出。DualSense 游戏触觉支持不能替代本路径验证。
+
+**Boundary / 未验证：** 测试执行原始复制片段与原始 API adapter/core，但
+没有执行真实 RemoteHID capability 解析、真实缓存选择、配置载入、handle
+解析、游戏调用或 Steam 网络发送。片段连接、对象初始值、分配/锁/时钟、
+工作队列及最终 HID 为明确替身；不能称为实际主机上的端到端测试。用户的
+默认布局描述不能替代这些运行时证据。尚不能据此宣称增加能力位是完成修复，
+或宣称某款 PC 游戏经本链路已提供非零 Nintendo 高级震动。设备 HOS 读回与
+物理保真边界仍按 §22.9 保留。
+
+API 槽位顺序另以 Valve 发布的
+[Steamworks ISteamInput 头文件](https://github.com/ValveSoftware/Proton/blob/proton_11.0/lsteamclient/steamworks_sdk_163/isteaminput.h)
+核对：SteamInput006 `+0x110` 为 legacy pulse；这只解释调用入口，不证明
+任何游戏实际调用它。可复核的输入散列、原始反汇编、两版 JSON 报告存于本地
+`build/haptics-host-20261118/`；用户二进制与完整日志不纳入仓库。
