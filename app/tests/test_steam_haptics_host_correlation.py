@@ -22,7 +22,7 @@ def fixture():
                 requests += [dict(stage='snapshot_end', label='before_pulse', route=route,
                                   after_serial=serial, elapsed_us=now),
                              dict(stage='pulse_request', route=route, side=side, ordinal=ordinal,
-                                  elapsed_us=now + 1)]
+                                  elapsed_us=now + 1, flags=0, duration_us=1000)]
                 serial += 1
                 seq = serial
                 native = bytes.fromhex('1000000005c000014040' if side == 0 else '100000014040000005c0')
@@ -63,8 +63,22 @@ class Correlation(unittest.TestCase):
         self.assertEqual(result['nonzero_native_packets'], 12)
         self.assertFalse(any(r['software_correlation_verified'] for r in result['routes'].values()))
 
+    def test_bypass_result_stays_labelled(self):
+        requests, capture, manifest = fixture()
+        for row in requests:
+            if row.get('route') == 'host_rpc':
+                row['route'] = 'host_rpc_flags1'
+                if row['stage'] == 'pulse_request':
+                    row['flags'] = 1
+        result = module.analyze(requests, capture, manifest)
+        self.assertTrue(result['routes']['host_rpc_flags1']['diagnostic_gate_bypass'])
+        self.assertTrue(result['routes']['host_rpc_flags1']['software_correlation_verified'])
+        self.assertNotIn('host_rpc', result['routes'])
+
     def test_negative_controls(self):
         mutations = {
+            'source_flags_changed': lambda q, c, m: q[1].__setitem__('flags', 1),
+            'source_duration_changed': lambda q, c, m: q[1].__setitem__('duration_us', 1),
             'lost_command': lambda q, c, m: c.pop(0),
             'lost_sample': lambda q, c, m: c.pop(2),
             'wrong_target': lambda q, c, m: c[2]['values'].reverse(),

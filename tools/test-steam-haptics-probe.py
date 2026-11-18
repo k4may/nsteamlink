@@ -86,6 +86,10 @@ def main():
         ('invalid_device_address', fixture,
          ['--probe', '--compare-host-rpc', '--switch-address', 'not-an-ip'], {}, 1,
          'device_address_invalid'),
+        ('isolated_gates', fixture,
+         ['--probe', '--compare-host-rpc', '--isolate-gates', '--switch-address', '127.0.0.1'],
+         {'NSL_MOCK_EXPECT_PROBE': '1', 'NSL_MOCK_EXPECT_RPC': '1', 'NSL_MOCK_EXPECT_ISOLATION': '1'},
+         0, 'requests_complete_delivery_unverified'),
     ]
     # Actual UDP/Windows socket path; fake empty device trace is never delivery.
     stopped = threading.Event()
@@ -116,7 +120,8 @@ def main():
             stages = [row.get('stage') for row in rows]
             if result.returncode != expected_exit or expected_stage not in stages:
                 raise AssertionError((name, result.returncode, result.stdout, result.stderr))
-            expected_pulses = (6 if extra.get('NSL_MOCK_EXPECT_RPC') else 3) if extra.get('NSL_MOCK_EXPECT_PROBE') else 0
+            expected_pulses = (9 if extra.get('NSL_MOCK_EXPECT_ISOLATION') else
+                               6 if extra.get('NSL_MOCK_EXPECT_RPC') else 3) if extra.get('NSL_MOCK_EXPECT_PROBE') else 0
             if stages.count('native_left_request') != expected_pulses or stages.count('native_right_request') != expected_pulses:
                 raise AssertionError((name, stages))
             report.append(dict(name=name, exit_code=result.returncode, passed=True))

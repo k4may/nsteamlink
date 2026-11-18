@@ -1892,3 +1892,46 @@ trace serial、保留原始响应与主机发送/接收时刻，再关联非零 
 后续样本；静音、setup、Steam UI 自发反馈、旧 trace 与丢号必须分别处理。
 六次请求不必对应六个包，左右缓存、去重、合并及内部门禁都需显式分析；只有
 请求数量或 native_commands 增长不能认证交付。
+
+### 22.16 生效状态的只读检查与门禁隔离
+
+`ActualControllerDetails` 的 caps 含 `0x2000` 证明主机设备信息保留该能力，
+不证明活动配置 `+0x240` 采用同一值、preferences 开启，或 IO `+0x1d1` 已置位。
+静音效果也可能来自停止/安全路径，不能反推正常非零 pulse 门禁开启。
+
+**Evidence / November 布局：** `GetClientEngine` 的 `0x1389a8009` 计算并对齐
+静态对象地址 `0x139854550`；构造器 `0x1389a6734` 设置最终 engine vtable
+`0x13938f580`。ConnectGlobalUser 的 `0x1389a7d52..0x1389a7deb` 遍历
+engine `+0x108` 的树，root 在 tree `+0x18`、nodes 在 `+0x30`，node stride
+128、controller pointer 在 node `+0x78`。本地 CSteamController vtable 为
+`0x139304dc0`，`+0x10922d=1` 选择 `+0x180` 的 CHIDIOThread，vtable
+`0x139304c68`。slot stride `0x2a0`，abstraction 在 `+0x1c0`、配置在
+`+0x2a0`。Generic vtable `0x139318fd0` 的 unique getter `0x13868e850`
+在 `+0xb8` 有效时返回 `+0x98` handle；`GetInfo` 从 `+0x78` 拷贝，故 caps
+在 abstraction `+0x80`。普通强度缓存位于 `+0x552/+0x554`，enhanced 在
+`+0x588`；这些是 producer 的门禁输入，不是物理输出读回。
+
+**Evidence / 配置与偏好：** `0x13862520e..0x13862521d` 将 config `+0x661`
+拷到 IO slot `+0x1d1`；普通 rumble 对应 `+0x660/+0x1d0`。普通入队函数
+`0x13863812a` 将活动 config `+0x258` 与传入 AppID 比较。配置 caps/type
+在 `+0x240/+0x230`，零 override 会走类型默认表。GetControllerPersonalization
+的 `0x13861bbb0` 从 parent `+0x230 + index*0xe0` 拷贝 preferences，返回
+`+0x1f0 + index*0xe0` 的有效位；copy `0x1386024d0`、默认构造及 haptics
+setter 支持 preferences `+0x8c` 的字段定位。未置有效位时不能将缓存当成
+当前用户偏好。其 serialized RPC 传递进程内指针（`0x13878f5dc` 检查 map
+`+0x10`），不能从外部工具盲调该 getter 并把外部缓冲地址交给主机。
+
+诊断器可对明确的 steam.exe 及 SHA 固定的 steamclient64.dll 使用
+`ReadProcessMemory`，仅提取以上目标 handle 的少量字段；无写内存、注入、
+调试器附加或完整内存转储。树遍历有界，检查 engine/controller/IO/Generic
+vtable、handle/type/valid，重读 identity/config 指针；歧义、不支持的 32 位
+布局、读取失败或不一致须报告 unavailable，禁止猜地址。它是无锁观察，重读
+不构成原子快照保证；读取成功也不是 IPC/物理 ACK。可另收集磁盘配置中
+haptic/rumble/vibration 的匹配行，但磁盘值不能代替活动配置或运行时偏好。
+
+**隔离合同：** 专用主机诊断省去非零普通对照，每次停止后等待至少 800ms，
+以覆盖 producer 的已知 500ms 普通冲突窗口及 50ms 单侧限制；保留逐请求 UDP
+bracket。另设明确标记的 `host_rpc_flags1` 正对照，与 public/host_rpc 的
+flags=0 分开记录/认证，不编辑布局、偏好或 capabilities。该正对照仅隔离门禁，
+不能作为生产修复，也不能将其成功改称正常游戏 API 已通过。即使该对照失败，
+也须保留实际门禁/producer/交付边界，不直接归咎于游戏或 Switch 硬件。

@@ -29,6 +29,7 @@ static object client = {client_slots, NULL}, input = {input_slots, NULL};
 static unsigned ordinary, pulses[2];
 static bool initialized, shut_down, user_released;
 static unsigned rpc_pulses[2];
+static unsigned bypass_pulses[2];
 static bool map_created, map_destroyed;
 static const uint64_t handle = UINT64_C(0x112233445566);
 #ifdef NSL_MOCK_PRIVATE_LAYOUT
@@ -71,9 +72,9 @@ bool details_impl(void *self, unsigned index, unsigned char *info) {
 void rpc_pulse_impl(void *self, unsigned index, int side, uint16_t duration,
                     uint16_t off, uint16_t repeat, unsigned flags) {
     assert(self == &map && index == 3 && side >= 0 && side <= 1);
-    assert(!off && repeat == 1 && !flags && (duration == 0 || duration == 1000));
+    assert(!off && repeat == 1 && flags <= 1 && (duration == 0 || duration == 1000));
     assert(map_created && !map_destroyed && initialized && !shut_down);
-    if (duration) ++rpc_pulses[side];
+    if (duration) { if (flags) ++bypass_pulses[side]; else ++rpc_pulses[side]; }
 }
 #endif
 static int make_pipe(void *self) { assert(self == &client); return 7; }
@@ -134,10 +135,12 @@ static void rumble(void *self, uint64_t id, uint16_t left, uint16_t right) {
 static bool shutdown_input(void *self) {
     assert(self == &input && initialized && !shut_down);
     bool expected = GetEnvironmentVariableA("NSL_MOCK_EXPECT_PROBE", NULL, 0) != 0;
-    assert(ordinary == (expected ? 1u : 0u));
+    bool isolated = GetEnvironmentVariableA("NSL_MOCK_EXPECT_ISOLATION", NULL, 0) != 0;
+    assert(ordinary == (expected && !isolated ? 1u : 0u));
     assert(pulses[0] == (expected ? 3u : 0u) && pulses[1] == (expected ? 3u : 0u));
     bool rpc_expected = GetEnvironmentVariableA("NSL_MOCK_EXPECT_RPC", NULL, 0) != 0;
     assert(rpc_pulses[0] == (rpc_expected ? 3u : 0u) && rpc_pulses[1] == (rpc_expected ? 3u : 0u));
+    assert(bypass_pulses[0] == (isolated ? 3u : 0u) && bypass_pulses[1] == (isolated ? 3u : 0u));
     assert(!map_created || map_destroyed);
     shut_down = true;
     return true;

@@ -139,6 +139,13 @@ python3 tools/analyze-steam-haptics-probe.py --requests requests.jsonl \
 目标一致的非零原包及三条成功提交的正确样本；超时、缺号、参数/目标错误和
 源失败不能通过。这不认证机械振幅、系统读回、游戏支持或 loader 返回。
 
+已确认主机 caps 后仍无非零效果时，可在上述命令追加 `-IsolateGates`：省去
+非零普通刺激、每次停止后等待 800ms；增加 `host_rpc_flags1` 诊断正对照并
+尝试读取固定布局的 Steam 主机门禁字段。该结果与 flags=0 分开，正对照成功
+不等于正常游戏路径修好。读取仅针对 Steam 目标手柄；不支持的 32 位主机、
+布局/权限错误会报告 unavailable，不写内存、不改偏好。ZIP 另含磁盘配置的
+触觉相关匹配行；这些行不是当前运行时状态证明。机制和边界见 §22.16。
+
 验收需在主机调用时间段看到接受的非零 `0x0d` Nintendo 原包及对应输出；
 普通震动、静音包、主机工具成功退出均不满足该条件。`haptics` 的
 `native_capability_mask` 只表示本地后端支持快照，不是主机已采用该能力的 ACK。

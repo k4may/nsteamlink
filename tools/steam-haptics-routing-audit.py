@@ -405,6 +405,58 @@ def rpc_bridge_evidence(pe):
                 owned_map_freed=True, actual_steam_ipc_verified=False)
 
 
+def host_state_layout_evidence(pe):
+    """Original scalar-address/copy fragments; not remote process enumeration.
+
+    String allocation, object locks and controller validity predicate are stubs.
+    Heap contents are synthetic; no live user's preferences or gates are read.
+    """
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    m.write(0x139854717, 1, 1)
+    m.allowed = [(0x1389a8009, 0x1389a802c)]
+    m.run(0x1389a8009, stops=(0x1389a802c,))
+    engine = m.reg('rbx')
+    assert engine == 0x139854550
+    m.reg('rdi', engine)
+    m.allowed += [(0x1389a6734, 0x1389a673e)]
+    m.run(0x1389a6734, stops=(0x1389a673e,))
+    assert m.read(engine) == 0x13938f580
+    node, parent = m.alloc(), m.alloc(0x11c000)
+    m.reg('rdx', node)
+    m.reg('r14', parent)
+    m.allowed += [(0x1389a7deb, 0x1389a7def)]
+    m.run(0x1389a7deb, stops=(0x1389a7def,))
+    assert m.read(node + 0x78) == parent
+    obj = m.alloc()
+    m.write(obj + 0x98, 0x0057e2009f4e844f)
+    m.write(obj + 0xb8, 1, 1)
+    for pc, stub in ((0x13868e867, 0x480080), (0x13868e884, 0x480090)):
+        rumble.indirect(m, pe, pc, lambda: m.ret(), stub)
+    m.allowed += [(0x13868e850, 0x13868e898)]
+    m.run(0x13868e850, obj)
+    assert m.reg('rax') == 0x0057e2009f4e844f
+    table, output = m.alloc(), m.alloc()
+    m.write(parent, table)
+    m.write(table + 0x58, 0x4800a0)
+    m.stubs[0x4800a0] = lambda: m.ret(1)
+    m.stubs[0x138d243f0] = lambda: m.ret()
+    m.write(parent + 0x1f0, 1, 1)
+    for pc, stub in ((0x13861bbfd, 0x4800b0), (0x13861bc26, 0x4800c0)):
+        rumble.indirect(m, pe, pc, lambda: m.ret(), stub)
+    m.allowed += [(0x13861bbb0, 0x13861bc46), (0x1386024d0, 0x138602660)]
+    for enabled in (0, 1):
+        m.write(parent + 0x230 + 0x8c, enabled, 1)
+        m.run(0x13861bbb0, parent, 0, output)
+        assert m.reg('rax') & 255 == 1
+        assert m.read(output + 0x8c, 1) == enabled
+    return dict(passed=True, engine_rva=hex(engine - pe.OPTIONAL_HEADER.ImageBase),
+                engine_vtable_rva='138f580', controller_record_offset='0x78',
+                unique_handle_offset='0x98', cached_haptics_offset='0x230 + slot*0xe0 + 0x8c',
+                unlocked_observation_only=True, actual_host_state_verified=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', type=Path, required=True)
@@ -480,6 +532,7 @@ def main():
                   simple_haptic_evidence=simple_haptic_evidence(pe),
                   context_enumeration_evidence=context_enumeration_evidence(pe),
                   rpc_bridge_evidence=rpc_bridge_evidence(pe),
+                  host_state_layout_evidence=host_state_layout_evidence(pe),
                   original_addresses={
                       'active_config': hex(address(pe, 0x138665a20)),
                       'config_to_slot_fragment': hex(address(pe, 0x13860edae)),

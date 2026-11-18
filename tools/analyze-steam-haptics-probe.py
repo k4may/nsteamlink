@@ -33,6 +33,7 @@ def nonzero(row):
 def analyze(requests, capture=(), manifest=None):
     manifest = manifest or {}
     records, conflicts, stats, reply_errors = {}, [], [], []
+    capture_stats = [r for r in capture if r.get('stage') == 'haptics']
 
     def collect(row):
         if 'serial' in row:
@@ -47,6 +48,7 @@ def analyze(requests, capture=(), manifest=None):
 
     for row in capture:
         collect(row)
+    stats.clear()
     for row in requests:
         if row.get('stage') == 'device_reply':
             if row.get('error'):
@@ -75,6 +77,9 @@ def analyze(requests, capture=(), manifest=None):
             active = [r for r in window if nonzero(r)]
             expected = b'\x10\0' + (NEUTRAL + PULSE if pending['side'] else PULSE + NEUTRAL)
             errors = []
+            expected_flags = 1 if route == 'host_rpc_flags1' else 0
+            if pending.get('duration_us') != 1000 or pending.get('flags') != expected_flags:
+                errors.append('unexpected_source_parameters')
             if not before or before['route'] != route or row['route'] != route or not (
                     before['elapsed_us'] <= pending['elapsed_us'] <= row['elapsed_us']):
                 errors.append('invalid_request_bracket')
@@ -116,6 +121,7 @@ def analyze(requests, capture=(), manifest=None):
         verified = (successful_source and complete and len(matches) == 6 and all(r['matched'] for r in matches)
                     and not conflicts and not reply_errors)
         routes[route] = dict(requests=len(phase), matched=sum(r['matched'] for r in matches),
+                             diagnostic_gate_bypass=any(p.get('flags', 0) for p in phase),
                              software_correlation_verified=bool(verified))
     active = [r for r in ordered if nonzero(r)]
     timestamps = [r['received_ns'] for r in active]
@@ -130,7 +136,9 @@ def analyze(requests, capture=(), manifest=None):
                 nonzero_packet_span_ms=(max(timestamps) - min(timestamps)) / 1e6 if timestamps else None,
                 source_request_span_ms=(max(request_times) - min(request_times)) / 1000 if request_times else None,
                 routes=routes, intervals=intervals, conflicting_serials=conflicts,
-                device_reply_errors=len(reply_errors), latest_counters=stats[-1] if stats else None,
+                device_reply_errors=len(reply_errors), last_inline_counters=stats[-1] if stats else None,
+                last_capture_counters=capture_stats[-1] if capture_stats else None,
+                host_gate_observations=[r for r in requests if r.get('stage') == 'host_gate_state'],
                 game_support_verified=False, physical_fidelity_verified=False, loader_return_verified=False,
                 limits='Packet presence alone does not attribute effects to this helper. RPC correlation does not verify the public game API route. IPC success is not physical-fidelity proof.')
 

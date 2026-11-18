@@ -11,6 +11,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <tlhelp32.h>
 #include <bcrypt.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -19,6 +20,7 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include <string.h>
+#include "steam-haptics-host-state.h"
 
 #ifndef NSL_PROBE_HOST_SHA256
 #define NSL_PROBE_HOST_SHA256 "669fa08e259277fbf5a1dfe15ce88afe734e89151194304b44d92f418dcc985b"
@@ -53,6 +55,7 @@ static void *host_map;
 static int host_index = -1;
 static uint64_t trace_serial;
 static const char *route = "public";
+static unsigned pulse_flags;
 static bool file_sha256(const wchar_t *path, char hex[65]) {
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                NULL, OPEN_EXISTING, 0, NULL);
@@ -92,6 +95,56 @@ static void stage(const char *name) {
     printf("{\"stage\":\"%s\",\"elapsed_us\":%llu}\n", name,
            (unsigned long long)elapsed_us());
     fflush(stdout);
+}
+static bool process_read(void *process, uint64_t address, void *out, size_t size) {
+    SIZE_T actual = 0;
+    return ReadProcessMemory(process, (const void *)(uintptr_t)address, out, size, &actual) && actual == size;
+}
+static void host_state(uint64_t handle, const char *label) {
+    HANDLE processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (processes == INVALID_HANDLE_VALUE) { stage("host_state_process_list_unavailable"); return; }
+    PROCESSENTRY32W process = {0}; process.dwSize = sizeof(process);
+    bool found = false;
+    if (Process32FirstW(processes, &process)) do {
+        if (_wcsicmp(process.szExeFile, L"steam.exe")) continue;
+        found = true;
+        HANDLE modules = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process.th32ProcessID);
+        if (modules == INVALID_HANDLE_VALUE) { stage("host_state_module_list_unavailable"); continue; }
+        MODULEENTRY32W entry = {0}; entry.dwSize = sizeof(entry);
+        bool supported = false;
+        if (Module32FirstW(modules, &entry)) do {
+            if (_wcsicmp(entry.szModule, L"steamclient64.dll")) continue;
+            char sha[65];
+            if (!file_sha256(entry.szExePath, sha) || strcmp(sha, NSL_PROBE_HOST_SHA256)) {
+                stage("host_state_unknown_host_binary"); continue;
+            }
+            supported = true;
+            HANDLE target = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process.th32ProcessID);
+            if (!target) { stage("host_state_read_access_unavailable"); continue; }
+            nsl_host_haptics_state value = {0};
+            int result = nsl_host_haptics_state_read(process_read, target, (uintptr_t)entry.modBaseAddr, handle, &value);
+            CloseHandle(target);
+            printf("{\"stage\":\"host_gate_state\",\"label\":\"%s\",\"pid\":%lu,\"result\":%d,"
+                   "\"unlocked_observation\":true,\"elapsed_us\":%llu", label, process.th32ProcessID,
+                   result, (unsigned long long)elapsed_us());
+            if (result == 1) {
+                printf(",\"slot\":%u,\"device_caps\":\"%llx\",\"config_caps\":\"%llx\","
+                       "\"config_type\":%lu,\"active_appid\":%lu,\"pulse_gate\":%u,\"rumble_gate\":%u,"
+                       "\"config_pulse\":%u,\"config_rumble\":%u,\"preference_valid\":%u,"
+                       "\"haptics_preference\":%u,\"enhanced\":%u,\"ordinary_left\":%u,\"ordinary_right\":%u",
+                       value.slot, (unsigned long long)value.device_caps, (unsigned long long)value.config_caps,
+                       (unsigned long)value.config_type, (unsigned long)value.appid,
+                       value.pulse_gate, value.rumble_gate, value.config_pulse, value.config_rumble,
+                       value.preference_valid, value.haptics_preference, value.enhanced,
+                       value.ordinary_left, value.ordinary_right);
+            }
+            puts("}"); fflush(stdout);
+        } while (Module32NextW(modules, &entry));
+        if (!supported) stage("host_state_supported_64bit_module_not_found");
+        CloseHandle(modules);
+    } while (Process32NextW(processes, &process));
+    CloseHandle(processes);
+    if (!found) stage("host_state_steam_process_not_found");
 }
 static void quoted(const char *s) {
     putchar('"');
@@ -252,8 +305,8 @@ static void stop(uint64_t handle) {
     METHOD(input, 0x110, pulse_fn)(input, handle, 1, 0);
 }
 static void request_pulse(uint64_t handle, int side, uint16_t duration) {
-    if (!strcmp(route, "host_rpc"))
-        METHOD(host_map, 0x2a8, index_pulse_fn)(host_map, (unsigned)host_index, side, duration, 0, 1, 0);
+    if (!strncmp(route, "host_rpc", 8))
+        METHOD(host_map, 0x2a8, index_pulse_fn)(host_map, (unsigned)host_index, side, duration, 0, 1, pulse_flags);
     else METHOD(input, 0x110, pulse_fn)(input, handle, side, duration);
 }
 static void stop_pulse(uint64_t handle) {
@@ -261,7 +314,7 @@ static void stop_pulse(uint64_t handle) {
 }
 int wmain(int argc, wchar_t **argv) {
     wchar_t root[32768] = {0}, dll[32768], appid[16] = L"1049320";
-    bool probe = false, initialized = false, compare_rpc = false, winsock = false;
+    bool probe = false, initialized = false, compare_rpc = false, winsock = false, isolate = false;
     wchar_t switch_address[64] = {0};
     int result = 1, pipe = 0, user = 0;
     uint64_t selected = 0;
@@ -273,6 +326,7 @@ int wmain(int argc, wchar_t **argv) {
         if (!wcscmp(argv[i], L"--probe")) probe = true;
         else if (!wcscmp(argv[i], L"--list")) probe = false;
         else if (!wcscmp(argv[i], L"--compare-host-rpc")) compare_rpc = true;
+        else if (!wcscmp(argv[i], L"--isolate-gates")) isolate = true;
         else if (!wcscmp(argv[i], L"--switch-address") && i + 1 < argc) {
             if (wcslen(argv[++i]) >= 64) goto cleanup;
             wcscpy(switch_address, argv[i]);
@@ -292,7 +346,7 @@ int wmain(int argc, wchar_t **argv) {
             goto cleanup;
         }
     }
-    if (compare_rpc && (!probe || !switch_address[0])) {
+    if ((isolate && !compare_rpc) || (compare_rpc && (!probe || !switch_address[0]))) {
         stage("host_rpc_requires_probe_and_device"); goto cleanup;
     }
     if (switch_address[0]) {
@@ -376,26 +430,31 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (compare_rpc && !selected_remote) { stage("host_rpc_requires_remote_controller"); goto cleanup; }
     if (compare_rpc && !open_host_map(module, dll, user, selected)) goto cleanup;
+    if (isolate) host_state(selected, "before_requests");
     stop(selected);
     pump(800);
-    stage("ordinary_left_request");
-    METHOD(input, 0xf0, rumble_fn)(input, selected, 16384, 0);
-    pump(150);
-    stop(selected);
-    pump(800); /* Separate from the host's ordinary/pulse conflict window. */
-    for (unsigned pass = 0; pass < (compare_rpc ? 2u : 1u); ++pass) {
-        route = pass ? "host_rpc" : "public";
+    if (!isolate) {
+        stage("ordinary_left_request");
+        METHOD(input, 0xf0, rumble_fn)(input, selected, 16384, 0);
+        pump(150);
+        stop(selected);
+        pump(800); /* Separate from the host's ordinary/pulse conflict window. */
+    } else stage("ordinary_control_omitted_for_gate_isolation");
+    for (unsigned pass = 0; pass < (isolate ? 3u : compare_rpc ? 2u : 1u); ++pass) {
+        route = pass == 2 ? "host_rpc_flags1" : pass ? "host_rpc" : "public";
+        pulse_flags = pass == 2 ? 1u : 0u;
         for (int side = 0; side < 2; ++side) {
             for (int n = 0; n < 3; ++n) {
                 if (compare_rpc) {
-                    stop_pulse(selected); pump(150);
+                    stop_pulse(selected); pump(isolate ? 800 : 150);
+                    if (isolate) host_state(selected, route);
                     if (!snapshot("before_pulse")) { stage("device_snapshot_failed"); goto cleanup; }
                 }
                 printf("{\"stage\":\"pulse_request\",\"route\":\"%s\",\"side\":%d,\"ordinal\":%d,"
-                       "\"duration_us\":1000,\"flags\":0,\"elapsed_us\":%llu}\n",
-                       route, side, n, (unsigned long long)elapsed_us());
+                       "\"duration_us\":1000,\"flags\":%u,\"elapsed_us\":%llu}\n",
+                       route, side, n, pulse_flags, (unsigned long long)elapsed_us());
                 stage(side ? "native_right_request" : "native_left_request");
-                /* Ordinary legacy API: no internal bypass flags, no preference edit. */
+                /* The separately labelled flags=1 phase is diagnostic only. */
                 request_pulse(selected, side, 1000);
                 pump(compare_rpc ? 350 : 120);
                 if (compare_rpc && !snapshot("after_pulse")) { stage("device_snapshot_failed"); goto cleanup; }
@@ -403,6 +462,7 @@ int wmain(int argc, wchar_t **argv) {
         }
         stop_pulse(selected); pump(150);
         if (!snapshot("route_complete")) { stage("device_snapshot_failed"); goto cleanup; }
+        if (isolate) host_state(selected, route);
     }
     stop(selected);
     pump(250);
