@@ -1,8 +1,10 @@
 # Windows PowerShell 5.1+. No Steam installation/configuration changes.
 # Captures requests and host logs; delivery/fidelity need the Switch capture.
-param([string]$SteamRoot = '', [int]$AppId = 1049320)
+param([string]$SteamRoot = '', [int]$AppId = 1049320,
+      [string]$SwitchAddress = '', [switch]$CompareHostRpc)
 $ErrorActionPreference = 'Stop'
 if ($AppId -le 0) { throw 'AppId must be positive.' }
+if ($CompareHostRpc -and -not $SwitchAddress) { throw 'SwitchAddress is required for the RPC comparison.' }
 $executable = Join-Path $PSScriptRoot 'steam-haptics-probe.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw 'Probe executable missing.' }
 if (-not $SteamRoot) {
@@ -21,6 +23,8 @@ try {
         schema = 1
         started_at = (Get-Date).ToString('o')
         app_id = $AppId
+        switch_address = $SwitchAddress
+        compare_host_rpc = [bool]$CompareHostRpc
         steam_dll_sha256 = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
         steam_dll_version = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
         probe_sha256 = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -32,7 +36,10 @@ try {
         # Windows PowerShell turns native stderr into error records. Preserve
         # them in the archive even if the probe/Steam DLL reports an error.
         $ErrorActionPreference = 'Continue'
-        & $executable --steam-root $SteamRoot --appid $AppId --probe 2>&1 |
+        $probeArguments = @('--steam-root', $SteamRoot, '--appid', "$AppId", '--probe')
+        if ($SwitchAddress) { $probeArguments += @('--switch-address', $SwitchAddress) }
+        if ($CompareHostRpc) { $probeArguments += '--compare-host-rpc' }
+        & $executable @probeArguments 2>&1 |
             Out-File -LiteralPath (Join-Path $stage 'requests.jsonl') -Encoding utf8
         $manifest['exit_code'] = $LASTEXITCODE
     } finally {

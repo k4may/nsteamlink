@@ -8,6 +8,8 @@ Original active-config application also checks capability bit 0x2000 and the
 haptics preference. Config-to-slot copy instructions execute in isolation;
 November cache-to-config copy instructions also execute in isolation.
 RemoteHID caps parsing and real configuration initialization are not executed.
+November RPC factory/destructor, pulse marshaler and server thunk also execute;
+their engine context, buffer primitives, synchronous IPC/reply are substitutes.
 Synthetic controller/slot state, memory allocation, locks, clock imports and
 the work queue/HID terminal are substitutes. No actual game/API invocation,
 real configuration initialization, live Steam process or network is proved.
@@ -292,6 +294,117 @@ def context_enumeration_evidence(pe):
                 boundary=context_enumeration_evidence.__doc__.strip())
 
 
+def rpc_bridge_evidence(pe):
+    """Original November factory/destructor, pulse marshaler and server thunk.
+
+    Buffer primitives, engine/IPC, memory allocation and reply are substitutes.
+    This proves ABI/serialization only, not a running Steam RPC transaction.
+    """
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    engine = m.alloc()
+    freed = []
+    m.stubs.update({0x1389a7fe0: lambda: m.ret(engine),
+                    0x1388c2de0: lambda: m.ret(1),
+                    0x1388cea80: lambda: m.ret(m.alloc(m.reg('rcx'))),
+                    0x1388cead0: lambda: (freed.append((m.reg('rcx'), m.reg('rdx'))), m.ret())})
+    m.allowed = [(0x13876d560, 0x13876d64a), (0x1387483d0, 0x1387483fb)]
+    m.run(0x13876d560, 0, 11)
+    obj = m.reg('rax')
+    assert m.read(obj) == 0x139369980
+    assert (m.read(obj + 8, 4), m.read(obj + 12, 4), m.read(obj + 24)) == (0, 11, engine + 8)
+    wire = bytearray()
+    acknowledged = []
+    reply = m.alloc()
+
+    def init_buffer():
+        m.write(m.reg('rcx') + 12, 0x80000000, 4)  # supplied non-owning buffer
+        m.ret()
+
+    def append_byte():
+        wire.append(m.reg('rdx') & 255)
+        m.ret()
+
+    def append_bytes():
+        wire.extend(m.u.mem_read(m.reg('rdx'), m.reg('r8')))
+        m.ret()
+
+    def response_type():
+        m.write(m.reg('rdx'), 11, 1)
+        m.ret(1)
+
+    m.stubs.update({0x138d1aa40: init_buffer, 0x138d1d2a0: append_byte,
+                    0x138d1c6e0: append_bytes, 0x1388c31c0: lambda: m.ret(reply),
+                    0x138d1b5c0: response_type,
+                    0x1388c26e0: lambda: (acknowledged.append(m.reg('rdx')), m.ret())})
+    m.allowed += [(0x1388b6b60, 0x1388b6d40)]
+    # Actual seven-argument x64 call; non-default fields expose swapped arguments.
+    m.write(0x4f0008 + 0x28, 17, 2)
+    m.write(0x4f0008 + 0x30, 3, 2)
+    m.write(0x4f0008 + 0x38, 0, 4)
+    m.run(0x1388b6b60, obj, 4, 1, 1000)
+    expected = (bytes([1, 0x29]) + rumble.struct.pack('<IIIIHHHI',
+                0, 0x4f277b59, 4, 1, 1000, 17, 3, 0) +
+                rumble.struct.pack('<I', 0x545f70e4))
+    assert bytes(wire) == expected, wire.hex()
+    assert acknowledged == [reply]
+    pulse_wire = wire.hex()
+    parent, table = m.alloc(), m.alloc()
+    m.write(parent, table)
+    m.write(table + 0x50, 0x480070)
+    forwarded = []
+
+    def forwarded_pulse():
+        sp = m.reg('rsp')
+        forwarded.append([m.reg('rcx'), m.reg('rdx'), m.reg('r8'), m.reg('r9'),
+                          m.read(sp + 0x28, 2), m.read(sp + 0x30, 2), m.read(sp + 0x38, 4)])
+        m.ret()
+
+    m.stubs[0x480070] = forwarded_pulse
+    m.allowed += [(0x1389c2e90, 0x1389c2eaf)]
+    m.write(0x4f0008 + 0x28, 17, 2)
+    m.write(0x4f0008 + 0x30, 3, 2)
+    m.write(0x4f0008 + 0x38, 0, 4)
+    m.run(0x1389c2e90, parent - 16, 4, 1, 1000)
+    assert forwarded == [[parent, 4, 1, 1000, 17, 3, 0]]
+    details, output = m.alloc(0x1800), m.alloc()
+    index = 4
+    supplied = bytearray(88)
+    rumble.struct.pack_into('<Q', supplied, 8, 0x836bff)
+    rumble.struct.pack_into('<Q', supplied, 0x20, 0x0057e2009f4e844f)
+    rumble.struct.pack_into('<I', supplied, 0x34, 38)
+    supplied[0x40] = 1
+    wire.clear()
+    reads = []
+
+    def read_reply():
+        size = m.reg('r8')
+        reads.append(size)
+        m.u.mem_write(m.reg('rdx'), b'\x01' if size == 1 else bytes(supplied))
+        m.ret(1)
+
+    m.stubs[0x138745c30] = read_reply
+    m.allowed += [(0x13877e0b0, 0x13877e26f)]
+    m.run(0x13877e0b0, obj, index, output)
+    assert m.reg('rax') & 255 == 1 and reads == [1, 88]
+    assert bytes(m.u.mem_read(output, 88)) == bytes(supplied)
+    assert bytes(wire) == bytes([1, 0x29]) + rumble.struct.pack('<IIII', 0, 0xc3fe8503, index, 0xc93f17b1)
+    assert acknowledged == [reply, reply]
+    details_wire = wire.hex()
+    m.u.mem_write(details + 0xfe8 + index * 88, bytes(supplied))
+    m.allowed += [(0x138619090, 0x13861912b)]
+    m.run(0x138619090, details, index, output)
+    assert m.reg('rax') & 255 == 1
+    assert bytes(m.u.mem_read(output, 88)) == bytes(supplied)
+    m.run(0x1387483d0, obj, 1)
+    assert freed == [(obj, 32)]
+    return dict(passed=True, factory_pipe=0, factory_user=11,
+                vtable_rva='1369980', pulse_rpc_wire=pulse_wire, details_rpc_wire=details_wire,
+                server_arguments=forwarded[0][1:], details_bytes=88,
+                owned_map_freed=True, actual_steam_ipc_verified=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', type=Path, required=True)
@@ -366,6 +479,7 @@ def main():
                   preference_evidence=preference_evidence(pe),
                   simple_haptic_evidence=simple_haptic_evidence(pe),
                   context_enumeration_evidence=context_enumeration_evidence(pe),
+                  rpc_bridge_evidence=rpc_bridge_evidence(pe),
                   original_addresses={
                       'active_config': hex(address(pe, 0x138665a20)),
                       'config_to_slot_fragment': hex(address(pe, 0x13860edae)),

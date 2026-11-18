@@ -1857,3 +1857,38 @@ GameID 全局、Steam 配置或采用 pulse 绕行 flags；输出仍调用公开
 mock hash，生产 EXE 仍只接受真实主机 SHA。十项对照覆盖正常公开请求、空
 公开列表后的只读上下文查询、只读 list、未知 hash、错误 vtable/函数、越界
 数量、歧义设备、非 Nintendo 与非法 AppID；mock 通过不证明真实 Steam IPC。
+
+### 22.15 公开请求与主机索引 RPC 的验证边界
+
+**Evidence：** 当前 SHA `669fa08e…` 的 SteamInput006 legacy adapter
+`0x138738510` → `0x138637ac0` 先解析 handle，再按 CSteamController
+`+0x10922d` 选择 `+0x180` 或 `+0x190` 的 IO 对象，调用其 `+0x48`。
+本地入队 `0x138637920` 与远端事件生产函数 `0x1386379f0` 不是同一函数；
+后者将 20B 事件写入 `+0xc48` ring。成功返回不构成主机消费或设备交付 ACK。
+只读跨 AppID 枚举得到 handle 也不能证明公开输出已进入主机 worker。
+
+**Evidence：** engine 创建控制器的 `0x1389a7ce3` 调用 factory
+`0x13876d560`，参数为 `(0, hUser)`。该 factory 分配 32B 对象，最终 vtable
+为 `0x139369980`（IClientControllerSerializedMap）。其 `+0x2a8` 是
+`0x1388b6b60`，序列化 index、side、duration、off、repeat、flags 并同步发 RPC；
+server thunk `0x1389c2e90` 转发至 CSteamController `+0x50`，即
+`0x138637a80`，随后进入同一个 IO `+0x48`。`flags=0` 不绕过 pulse-enable。
+`+0x338` / `0x13877e0b0` 读回 88B ActualControllerDetails；server
+`0x138619090` 从有效 slot 拷贝详情，handle 位于 `+0x20`、内部 type 于
+`+0x34`、caps 于 `+8`、valid 于 `+0x40`。Generic GetInfo 原始拷贝
+`0x13868e522..0x13868e564` 与 unique-handle getter `0x13868e850` 支持
+这些偏移。map 的 deleting destructor `0x1387483d0` 在 flags bit0 为真时
+释放 32B；不能将新建 map 当作无所有权的 engine 缓存指针。
+
+**Conclusion：** 此 RPC 可用于隔离“公开进程的输出转发”与“主机 worker
+及原生输出”两段，不依赖任意游戏获得活动控制器关联。实际使用必须固定 DLL
+SHA、map vtable 与各方法 RVA，按 ActualControllerDetails 的精确 handle/type
+匹配唯一目标；不得猜 slot、强开配置、改偏好或使用绕行 flags。新 map 必须在
+ReleaseUser/ReleaseSteamPipe/FreeLibrary 前销毁。RPC 成功返回仍不是网络/设备
+ACK，更不是公开游戏 API 可用的证明。真实 IPC、门禁状态与交付须分别取证。
+
+主机与设备时钟未校准时不能直接相减。验证工具应按每次请求前后 UDP 读回
+trace serial、保留原始响应与主机发送/接收时刻，再关联非零 motor words 和
+后续样本；静音、setup、Steam UI 自发反馈、旧 trace 与丢号必须分别处理。
+六次请求不必对应六个包，左右缓存、去重、合并及内部门禁都需显式分析；只有
+请求数量或 native_commands 增长不能认证交付。

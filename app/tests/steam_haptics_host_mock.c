@@ -28,7 +28,54 @@ static void *input_slots[46];
 static object client = {client_slots, NULL}, input = {input_slots, NULL};
 static unsigned ordinary, pulses[2];
 static bool initialized, shut_down, user_released;
+static unsigned rpc_pulses[2];
+static bool map_created, map_destroyed;
 static const uint64_t handle = UINT64_C(0x112233445566);
+#ifdef NSL_MOCK_PRIVATE_LAYOUT
+static struct { char padding[0x980]; void *slots[104]; }
+    map_storage __attribute__((section(".nslmap"), aligned(8)));
+extern void *factory_fixed(int, int);
+extern void *destroy_fixed(void *, unsigned);
+extern bool details_fixed(void *, unsigned, unsigned char *);
+extern void rpc_pulse_fixed(void *, unsigned, int, uint16_t, uint16_t, uint16_t, unsigned);
+__asm__(".section .nslfac,\"xr\"\n.space 0x560,0x90\n.globl factory_fixed\nfactory_fixed:\njmp factory_impl\n.text");
+__asm__(".section .nsldel,\"xr\"\n.space 0x3d0,0x90\n.globl destroy_fixed\ndestroy_fixed:\njmp destroy_impl\n.text");
+__asm__(".section .nsldet,\"xr\"\n.space 0xb0,0x90\n.globl details_fixed\ndetails_fixed:\njmp details_impl\n.text");
+__asm__(".section .nslpls,\"xr\"\n.space 0xb60,0x90\n.globl rpc_pulse_fixed\nrpc_pulse_fixed:\njmp rpc_pulse_impl\n.text");
+static object map = {map_storage.slots, NULL};
+void *factory_impl(int pipe, int user) {
+    assert(!pipe && user == 11 && !map_created);
+    map_created = true;
+    map_storage.slots[0] = destroy_fixed;
+    map_storage.slots[0x2a8 / 8] = rpc_pulse_fixed;
+    map_storage.slots[0x338 / 8] = details_fixed;
+    if (GetEnvironmentVariableA("NSL_MOCK_BAD_MAP_METHOD", NULL, 0))
+        map_storage.slots[0x338 / 8] = NULL;
+    return &map;
+}
+void *destroy_impl(void *self, unsigned flags) {
+    assert(self == &map && flags == 1 && map_created && !map_destroyed && !user_released);
+    map_destroyed = true;
+    return self;
+}
+bool details_impl(void *self, unsigned index, unsigned char *info) {
+    assert(self == &map && map_created && !map_destroyed && index < 16);
+    if (index != 3) return false;
+    uint64_t id = handle, caps = 0x836bff;
+    uint32_t type = 38;
+    if (GetEnvironmentVariableA("NSL_MOCK_WRONG_RPC_HANDLE", NULL, 0)) ++id;
+    memcpy(info + 0x20, &id, 8); memcpy(info + 8, &caps, 8); memcpy(info + 0x34, &type, 4);
+    info[0x40] = 1;
+    return true;
+}
+void rpc_pulse_impl(void *self, unsigned index, int side, uint16_t duration,
+                    uint16_t off, uint16_t repeat, unsigned flags) {
+    assert(self == &map && index == 3 && side >= 0 && side <= 1);
+    assert(!off && repeat == 1 && !flags && (duration == 0 || duration == 1000));
+    assert(map_created && !map_destroyed && initialized && !shut_down);
+    if (duration) ++rpc_pulses[side];
+}
+#endif
 static int make_pipe(void *self) { assert(self == &client); return 7; }
 static int connect_user(void *self, int pipe) {
     assert(self == &client && pipe == 7);
@@ -89,6 +136,9 @@ static bool shutdown_input(void *self) {
     bool expected = GetEnvironmentVariableA("NSL_MOCK_EXPECT_PROBE", NULL, 0) != 0;
     assert(ordinary == (expected ? 1u : 0u));
     assert(pulses[0] == (expected ? 3u : 0u) && pulses[1] == (expected ? 3u : 0u));
+    bool rpc_expected = GetEnvironmentVariableA("NSL_MOCK_EXPECT_RPC", NULL, 0) != 0;
+    assert(rpc_pulses[0] == (rpc_expected ? 3u : 0u) && rpc_pulses[1] == (rpc_expected ? 3u : 0u));
+    assert(!map_created || map_destroyed);
     shut_down = true;
     return true;
 }

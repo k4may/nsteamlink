@@ -28,6 +28,8 @@ def main():
         sock.settimeout(.5)
 
         def save(row):
+            row = dict(row, collector_wall_ns=time.time_ns(),
+                       collector_monotonic_ns=time.monotonic_ns())
             out.write(json.dumps(row) + "\n")
             out.flush()
 

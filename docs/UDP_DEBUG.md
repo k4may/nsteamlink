@@ -82,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host
 powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host.ps1 -SteamRoot 'D:\Steam' -AppId 1049320
 ```
 
-受控主机源使用 `tools/steam-haptics-probe-win.c`，只通过公开 Steam Input
+受控主机源使用 `tools/steam-haptics-probe-win.c`，默认通过公开 Steam Input
 接口请求效果，不需要特定游戏提供震动。先运行带 native capability 查询的
 诊断 NRO，并正常连接这台 Steam 主机；采集端运行
 `capture-switch-haptics.py --address <当前设备 IP> --seconds 60 --output <文件>`。
@@ -111,6 +111,33 @@ python3 tools/test-steam-haptics-probe.py --output build/haptics-probe-mock \
 ```
 
 该测试依赖 MinGW/Wine，mock DLL 与允许 mock hash 的测试 EXE 不得放入主机工具包。
+
+隔离公开进程转发与主机输出时，可显式运行内部 RPC 对照：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run-steam-haptics-probe.ps1 -SwitchAddress 10.10.10.111 -CompareHostRpc
+```
+
+地址必须是用户确认的当前设备地址。该模式在发送前查询 UDP 28772，不接触
+netloader；诊断无响应即拒绝。它固定当前 DLL SHA、私有 map vtable/方法 RVA，
+从主机 ActualControllerDetails 精确匹配远程 Switch handle/type，禁止猜 slot。
+分别经公开 API 和主机索引 RPC 请求左右各三次脉冲，均使用 flags=0，不修改
+偏好、布局、能力或游戏上下文。每次前后读取 trace，并保存原始 UDP 响应与
+主机发送/接收时间；两台设备时钟不直接相减。新建 map 在释放用户/pipe 前销毁。
+该入口仅为版本固定的诊断工具，不能加入通用客户端；RPC 路径通过也不能证明
+公开游戏路径通过。协议依据见 §22.15。
+
+主机 ZIP 解压后可离线分析；旧版无逐请求 bracket 时只能统计，不能关联认证：
+
+```sh
+python3 tools/analyze-steam-haptics-probe.py --requests requests.jsonl \
+  --manifest manifest.json --output analysis.json
+# 可追加 --capture <设备 capture.jsonl> 合并独立采集。
+```
+
+`software_correlation_verified` 要求该路由的六次请求各自有完整 serial 区间、
+目标一致的非零原包及三条成功提交的正确样本；超时、缺号、参数/目标错误和
+源失败不能通过。这不认证机械振幅、系统读回、游戏支持或 loader 返回。
 
 验收需在主机调用时间段看到接受的非零 `0x0d` Nintendo 原包及对应输出；
 普通震动、静音包、主机工具成功退出均不满足该条件。`haptics` 的

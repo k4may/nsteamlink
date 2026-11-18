@@ -1520,6 +1520,8 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-haptic-source-time COMMAND nsl-haptic-source-time-tests)
     add_test(NAME nsl-haptics-verifier COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_verifier.py")
+    add_test(NAME nsl-steam-haptics-host-correlation COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_steam_haptics_host_correlation.py")
     add_executable(nsl-hd-rumble-oracle tests/hd_rumble_oracle.c platforms/common/hd_rumble.c)
     target_include_directories(nsl-hd-rumble-oracle PRIVATE src)
     target_link_libraries(nsl-hd-rumble-oracle PRIVATE m)

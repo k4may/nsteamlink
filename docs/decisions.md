@@ -3609,3 +3609,10 @@ AppID 过滤；无游戏场景为空时，允许仅在固定 DLL SHA、adapter/c
 它不修改 Steam 偏好/布局、不使用绕行 flags、不伪装其他手柄，也不附带 Valve DLL。
 实际 API 请求、Switch
 原包、解码/IPC、系统读回和物理结果分别验收；主机源退出成功不算交付或保真。
+
+为隔离公开进程的输出转发，可显式选择 hash/layout 固定的主机索引 RPC 诊断
+对照。使用 ActualControllerDetails 精确匹配同一远程 handle/type，flags=0，
+不强开配置/偏好；独立 map 需在释放用户/pipe 前销毁。按每次请求前后读取的
+设备 trace serial 关联，记录主机发送/接收时刻，不跨设备直接相减时钟。
+此私有入口不作为生产客户端依赖，也不作为公开游戏 API 可用的证据；依据和
+ABI 边界见 OFFICIAL_INPUT_RE §22.15。
