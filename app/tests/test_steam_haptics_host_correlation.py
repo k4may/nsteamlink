@@ -14,7 +14,13 @@ spec.loader.exec_module(module)
 
 def fixture():
     requests, capture = [], []
-    serial = 0
+    words = [bytes.fromhex('00014040'), bytes.fromhex('00014040')]
+    capture.append(dict(serial=1, kind=1, slot=0, seq=1, rc=0, received_ns=1,
+                        wire=(bytes.fromhex('0d0a0000001000') + b''.join(words) + bytes(54)).hex()))
+    capture.append(dict(serial=2, kind=2, slot=0, seq=1, sample=0, rc=0, received_ns=1,
+                        due_ns=1, sent_ns=2, completed_ns=3,
+                        values=[[0,160,0,320],[0,160,0,320]]))
+    serial = 2
     for route in ('public', 'host_rpc'):
         for side in (0, 1):
             for ordinal in range(3):
@@ -25,17 +31,21 @@ def fixture():
                                   elapsed_us=now + 1, flags=0, duration_us=1000)]
                 serial += 1
                 seq = serial
-                native = bytes.fromhex('1000000005c000014040' if side == 0 else '100000014040000005c0')
+                words[side] = bytes.fromhex('000005c0')
+                native = bytes.fromhex('1000') + b''.join(words)
                 capture.append(dict(serial=serial, kind=1, slot=0, seq=seq, rc=0,
                                     received_ns=now, wire=(b'\x0d\x0a\0\0\0' + native + bytes(54)).hex()))
                 for sample in range(3):
                     serial += 1
                     values = [[0, 160, 0, 320], [0, 160, 0, 320]]
                     if sample == 1:
-                        values[side][0] = 0.0441941731
+                        for motor, word in enumerate(words):
+                            if word == bytes.fromhex('000005c0'):
+                                values[motor][0] = 0.0441941731
+                    due = now + sample * 5_000_100
                     capture.append(dict(serial=serial, kind=2, slot=0, seq=seq, rc=0, sample=sample,
-                                        received_ns=now, due_ns=now, sent_ns=now + 1,
-                                        completed_ns=now + 2, values=values))
+                                        received_ns=now, due_ns=due, sent_ns=due + 1,
+                                        completed_ns=due + 2, values=values))
                 requests.append(dict(stage='snapshot_end', label='after_pulse', route=route,
                                      after_serial=serial, elapsed_us=now + 200))
     requests.append(dict(stage='cleanup_complete'))
@@ -47,6 +57,7 @@ class Correlation(unittest.TestCase):
         result = module.analyze(*fixture())
         self.assertTrue(all(r['software_correlation_verified'] for r in result['routes'].values()))
         self.assertFalse(result['physical_fidelity_verified'])
+        self.assertFalse(result['system_parameter_readback_verified'])
         self.assertFalse(result['game_support_verified'])
 
     def test_inline_udp_capture(self):
@@ -79,17 +90,20 @@ class Correlation(unittest.TestCase):
         mutations = {
             'source_flags_changed': lambda q, c, m: q[1].__setitem__('flags', 1),
             'source_duration_changed': lambda q, c, m: q[1].__setitem__('duration_us', 1),
-            'lost_command': lambda q, c, m: c.pop(0),
-            'lost_sample': lambda q, c, m: c.pop(2),
-            'wrong_target': lambda q, c, m: c[2]['values'].reverse(),
-            'wrong_value': lambda q, c, m: c[2]['values'][0].__setitem__(0, .1),
-            'nan_value': lambda q, c, m: c[2]['values'][0].__setitem__(0, float('nan')),
-            'wrong_order': lambda q, c, m: c[2].__setitem__('sample', 2),
-            'ipc_failed': lambda q, c, m: c[2].__setitem__('rc', 1),
-            'bad_time': lambda q, c, m: c[2].__setitem__('completed_ns', 1),
+            'missing_baseline': lambda q, c, m: c.pop(0),
+            'baseline_gap': lambda q, c, m: c.pop(1),
+            'lost_command': lambda q, c, m: c.pop(2),
+            'lost_sample': lambda q, c, m: c.pop(4),
+            'wrong_target': lambda q, c, m: c[4]['values'].reverse(),
+            'wrong_value': lambda q, c, m: c[4]['values'][0].__setitem__(0, .1),
+            'nan_value': lambda q, c, m: c[4]['values'][0].__setitem__(0, float('nan')),
+            'wrong_order': lambda q, c, m: c[4].__setitem__('sample', 2),
+            'ipc_failed': lambda q, c, m: c[4].__setitem__('rc', 1),
+            'bad_time': lambda q, c, m: c[4].__setitem__('completed_ns', 1),
+            'output_slot_changed': lambda q, c, m: c[6].__setitem__('slot', 1),
             'source_failed': lambda q, c, m: m.__setitem__('exit_code', 1),
             'udp_timeout': lambda q, c, m: q.insert(0, dict(stage='device_reply', error=10060, reply='')),
-            'conflicting_trace': lambda q, c, m: c.append(dict(c[2], rc=1)),
+            'conflicting_trace': lambda q, c, m: c.append(dict(c[4], rc=1)),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -97,6 +111,22 @@ class Correlation(unittest.TestCase):
                 mutate(requests, capture, manifest)
                 result = module.analyze(requests, capture, manifest)
                 self.assertFalse(result['routes']['public']['software_correlation_verified'])
+
+    def test_other_word_cannot_be_arbitrarily_cleared(self):
+        requests, capture, manifest = fixture()
+        # First right pulse should preserve the preceding left pulse word.
+        capture[14]['wire'] = (bytes.fromhex('0d0a000000100000014040000005c0') + bytes(54)).hex()
+        capture[16]['values'][0][0] = 0
+        result = module.analyze(requests, capture, manifest)
+        self.assertFalse(result['routes']['public']['software_correlation_verified'])
+        self.assertIn('nonzero_packet_count_or_target_mismatch', result['intervals'][3]['errors'])
+
+    def test_valid_timestamps_with_too_short_hold_fail(self):
+        requests, capture, manifest = fixture()
+        due = capture[3]['completed_ns'] + 1000
+        capture[4].update(due_ns=due, sent_ns=due + 1, completed_ns=due + 2)
+        result = module.analyze(requests, capture, manifest)
+        self.assertIn('sample_hold_shorter_than_5ms', result['intervals'][0]['errors'])
 
 
 if __name__ == '__main__':

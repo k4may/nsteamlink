@@ -457,10 +457,135 @@ def host_state_layout_evidence(pe):
                 unlocked_observation_only=True, actual_host_state_verified=False)
 
 
+def native_sequence(pe, events, cached_ordinary=0, initial_words=None):
+    """Original worker/producer over persistent state and a synthetic ms clock.
+
+    No enqueue/gate/IPC initialization runs here. Original import names are
+    Plat_RelativeTicks / Plat_TickDiffMilliSec; their values are substitutes.
+    Cached ordinary intensity is a supplied condition, not a live observation.
+    """
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    obj, handler, hvtable, device, dvtable = [m.alloc() for _ in range(5)]
+    m.write(obj, 0x139318fd0)
+    m.write(obj + 8, 38, 4)
+    m.write(obj + 0xac, 38, 4)
+    m.write(obj + 0xb8, 1, 1)
+    m.write(obj + 0x588, 1, 1)
+    m.write(0x139845410, 1, 4)
+    m.write(obj + 0x10, handler)
+    m.write(handler, hvtable)
+    m.write(handler + 0x10, device)
+    m.write(hvtable + 0x20, 0x138697ef0)
+    m.write(device, dvtable)
+    m.write(dvtable + 0x18, 0x480000)
+    words = initial_words or bytes.fromhex('0001404000014040')
+    m.u.mem_write(obj + 0x54a, words)
+    m.write(obj + 0x552, cached_ordinary, 2)
+    now, commands = [100000], []
+
+    def record():
+        assert m.reg('r8') == 69
+        commands.append(bytes(m.u.mem_read(m.reg('rdx'), 69)).hex())
+        m.ret(69)
+
+    m.stubs[0x480000] = record
+    for pc, callback, stub in (
+        (0x13868e51c, lambda: m.ret(), 0x480020),
+        (0x13868e570, lambda: m.ret(), 0x480030),
+        (0x138695422, lambda: m.ret(now[0]), 0x480040),
+        (0x138695435, lambda: m.ret(m.reg('rdx') - m.reg('rcx')), 0x480050)):
+        rumble.indirect(m, pe, pc, callback, stub)
+    m.allowed = [(0x13862df10, 0x13862dfe1), (0x13868e500, 0x13868e589),
+                 (0x13868b960, 0x13868baeb), (0x1386953e0, 0x13869559a),
+                 (0x13868cdf0, 0x13868ce5b), (0x138697ef0, 0x138697efc)]
+    results = []
+    for event in events:
+        now[0] = 100000 + event['time_ms']
+        work = m.alloc()
+        m.write(work + 0x78, event['side'], 1)
+        m.write(work + 0x7a, event['duration'], 2)
+        m.write(work + 0x7e, 1, 2)
+        m.write(work + 0x80, event.get('flags', 0), 2)
+        before = len(commands)
+        m.run(0x13862df10, work, obj)
+        results.append(dict(**event, commands=commands[before:]))
+    return dict(cached_ordinary=cached_ordinary, events=results,
+                final_words=bytes(m.u.mem_read(obj + 0x54a, 8)).hex(),
+                actual_runtime_cache_verified=False)
+
+
+def sequence_evidence(pe):
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    def event(t, side, duration):
+        return dict(time_ms=t, side=side, duration=duration)
+    preserve = native_sequence(pe, [event(0,0,1000), event(100,1,1000),
+                                    event(200,0,0), event(200,1,0)])
+    bodies = [e['commands'][0][10:30] for e in preserve['events']]
+    assert bodies == ['1000000005c000014040', '1000000005c0000005c0',
+                      '100000014040000005c0', '10000001404000014040']
+    short = [event(0,0,0), event(0,1,0), event(150,0,1000),
+             event(650,0,0), event(650,1,0), event(800,0,1000)]
+    normal = native_sequence(pe, short)
+    conflict = native_sequence(pe, short, cached_ordinary=16384)
+    assert [len(e['commands']) for e in normal['events']] == [1,1,1,1,1,1]
+    assert [len(e['commands']) for e in conflict['events']] == [1,0,0,1,0,0]
+    long = native_sequence(pe, [event(0,0,0), event(0,1,0), event(800,0,1000),
+                               event(1150,0,0), event(1150,1,0), event(1950,1,1000)],
+                           cached_ordinary=16384)
+    assert [len(e['commands']) for e in long['events']] == [1,0,1,0,0,1]
+    assert long['events'][-1]['commands'][0][10:30] == '1000000005c0000005c0'
+    return dict(passed=True, preserves_other_word=preserve,
+                short_gap_zero_ordinary=normal, short_gap_nonzero_ordinary=conflict,
+                long_gap_nonzero_ordinary=long,
+                boundary='Synthetic clocks/cache reproduce conditions; they do not establish the prior live failure cause.')
+
+
+def request_packet_oracle(pe, path):
+    """Compare each real bracket's wire with original code using prior wire state.
+
+    Target/duration/flags are actual logged requests. Other motor words come
+    only from the last packet BEFORE the request. Eligibility, clocks and ordinary
+    cache are synthetic allow conditions; this is a parameter oracle, not a
+    reconstruction of runtime gates or a physical-fidelity certificate.
+    """
+    rows = [json.loads(s) for s in path.read_text(encoding='utf-8-sig').splitlines() if s.startswith('{')]
+    trace, intervals, before, request = {}, [], None, None
+    for row in rows:
+        if row.get('stage') == 'device_reply':
+            for line in row.get('reply', '').splitlines():
+                record = json.loads(line)
+                if 'serial' in record: trace[record['serial']] = record
+    def payload(r):
+        b = bytes.fromhex(r.get('wire',''))
+        return b if r.get('kind') == 1 and r.get('rc') == 0 and len(b) == 69 and b[:7] == bytes.fromhex('0d0a0000001000') else None
+    for row in rows:
+        if row.get('stage') == 'snapshot_end' and row.get('label') == 'before_pulse':
+            before = row['after_serial']
+        elif row.get('stage') == 'pulse_request': request = row
+        elif row.get('stage') == 'snapshot_end' and row.get('label') == 'after_pulse' and request:
+            prior = [payload(trace[s]) for s in sorted(trace) if s <= before and payload(trace[s])]
+            emitted = [payload(trace[s]).hex() for s in sorted(trace) if before < s <= row['after_serial'] and payload(trace[s])]
+            if not prior: raise ValueError('Missing pre-request native baseline')
+            expected = native_sequence(pe, [dict(time_ms=0, side=request['side'],
+                duration=request['duration_us'], flags=request['flags'])], initial_words=prior[-1][7:15])
+            predicted = expected['events'][0]['commands']
+            intervals.append(dict(route=request['route'], side=request['side'], ordinal=request['ordinal'],
+                                  prior_words=prior[-1][7:15].hex(), expected=predicted,
+                                  actual=emitted, matched=predicted == emitted))
+            request = None
+    if not intervals: raise ValueError('No bracketed requests in archive')
+    return dict(all_matched=all(i['matched'] for i in intervals), requests=len(intervals),
+                intervals=intervals, boundary=request_packet_oracle.__doc__.strip())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', type=Path, required=True)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--requests', type=Path, help='Optional bracketed real request JSONL parameter oracle')
     args = parser.parse_args()
     raw = args.host.read_bytes()
     host_sha = rumble.hashlib.sha256(raw).hexdigest()
@@ -468,6 +593,8 @@ def main():
         raise ValueError(f'Unrecognized binary: {args.host}')
     pe = rumble.pefile.PE(data=raw)
     pe.haptics_november = host_sha == NOVEMBER_SHA
+    if args.requests and not pe.haptics_november:
+        parser.error('The stateful real-request oracle is pinned to the November host')
     cases = []
 
     def expected_pulse(side):
@@ -533,6 +660,8 @@ def main():
                   context_enumeration_evidence=context_enumeration_evidence(pe),
                   rpc_bridge_evidence=rpc_bridge_evidence(pe),
                   host_state_layout_evidence=host_state_layout_evidence(pe),
+                  sequence_evidence=sequence_evidence(pe),
+                  request_packet_oracle=request_packet_oracle(pe, args.requests) if args.requests else None,
                   original_addresses={
                       'active_config': hex(address(pe, 0x138665a20)),
                       'config_to_slot_fragment': hex(address(pe, 0x13860edae)),

@@ -1935,3 +1935,47 @@ bracket。另设明确标记的 `host_rpc_flags1` 正对照，与 public/host_rp
 flags=0 分开记录/认证，不编辑布局、偏好或 capabilities。该正对照仅隔离门禁，
 不能作为生产修复，也不能将其成功改称正常游戏 API 已通过。即使该对照失败，
 也须保留实际门禁/producer/交付边界，不直接归咎于游戏或 Switch 硬件。
+
+### 22.17 原生 producer 的跨请求缓存与逐次关联规则
+
+**Correction：** 撤回诊断验证器中“单侧请求的另一侧必为静音”和“两次零时长
+API 调用必已清空两侧源缓存”的假设。停止请求不是已发送静音包的 ACK；包的
+最后播放样本为零，也不代表主机缓存的整个 pulse word 被清除。验证器不得
+据这些假设把正确的双侧原包/输出判为客户端串侧，也不得简单允许任意双侧值。
+
+**Evidence / 缓存：** November Generic producer `0x1386954e3..0x138695528`
+只修改目标侧缓存 word，另一侧不变；`0x13869553d..0x138695576` 从对象
+`+0x548` 开始组装含两侧缓存的 10B Nintendo payload，放入完整 69B 容器。
+原始 CPulseHapticWorkItem 的目标转换也必须执行。对同一个对象连续运行原始
+worker/producer：left pulse → right pulse → left stop → right stop，对应
+payload 为 left-only → both-pulse → right-only → both-neutral。此原始指令
+对照由 `native_sequence` 实现，锁、时钟和终端为替身，不是实时主机配置读回。
+
+逐次参数验证从请求前最近一个**同 slot、已接受**的 Nintendo 原包取缓存基线，
+检查其后至 before serial 的记录完整性，再以日志中的 side/duration/flags
+执行原始 producer，核对完整容器。独立关联器只接受此固定夹具可解释的
+neutral/pulse 基线，更新请求侧并保留另一侧；拒绝未知基线、缺号、错侧、
+任意更改另一侧、错误样本、少于 5ms 保持及 IPC 失败。两条验证路径分开：
+原始编码器检查源包参数；逐次 trace 检查该包对应的三个 libnx 提交样本。
+这不是从“收到过非零包”直接推导成功，也不是把正对照成功当正常路径成功。
+
+**Evidence / 相互抑制：** producer 的 clock imports 分别为 tier0_s64.dll
+`Plat_RelativeTicks` / `Plat_TickDiffMilliSec`。`0x13869543b..0x138695459`
+在 shared timestamp 距现在小于 500ms，且普通强度缓存 `+0x552/+0x554`
+非零时拒绝；`0x1386954dc` 在成功组装原生包时刷新同一 shared timestamp，
+包括静音请求。普通 producer `0x138694527..0x13869453b` 写普通强度缓存
+及该 timestamp。故即使最初普通请求已过去较久，后续静音包也可能继续延长
+该条件；不能只在最初普通对照后等待 800ms 就保证每次后续 pulse 不受影响。
+
+原始指令连续对照：在 supplied ordinary cache=0 时，零请求后 150ms 的
+pulse 可输出；cache=16384 时，同样的停止/150ms 序列只输出部分静音，
+非零 pulse 被拒绝；等待 800ms 后可输出，先前目标 word 未被成功停止时又被
+后续另一侧请求带入原包。它证明机制及可复现条件，**不能证明某次真实运行的
+ordinary cache 确实非零**。不得将此条件复现改写为实时因果已查明。
+
+状态读取器返回 result=0 表示该固定 client-engine 缓存中未找到匹配的本地
+worker，不能解释成 Steam 没连接手柄或 haptics preference=false。它不覆盖
+所有服务端对象存储；未得到 result=1 就没有相应 gate/preference 实际读回。
+正常 flags=0 的受控请求及对应原包/输出可独立证明该次正常通路，无须把空
+状态观察作为成功条件。仍不能据此保证某款游戏会产生这些请求、任意 HD 波形、
+系统读回一致或机械保真。

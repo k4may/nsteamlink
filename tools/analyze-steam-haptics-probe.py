@@ -61,7 +61,7 @@ def analyze(requests, capture=(), manifest=None):
     ordered = [records[s] for s in sorted(records)]
     pulses = [row for row in requests if row.get('stage') == 'pulse_request']
     legacy = [row for row in requests if row.get('stage') in ('native_left_request', 'native_right_request')]
-    intervals, pending, before = [], None, None
+    intervals, pending, before, target_slot = [], None, None, None
     for row in requests:
         if row.get('stage') == 'snapshot_end' and row.get('label') == 'before_pulse':
             before = row
@@ -75,8 +75,30 @@ def analyze(requests, capture=(), manifest=None):
             hi = row['after_serial']
             window = [records[s] for s in sorted(records) if lo < s <= hi]
             active = [r for r in window if nonzero(r)]
-            expected = b'\x10\0' + (NEUTRAL + PULSE if pending['side'] else PULSE + NEUTRAL)
             errors = []
+            if len(active) == 1:
+                if target_slot is None:
+                    target_slot = active[0]['slot']
+                elif active[0]['slot'] != target_slot:
+                    errors.append('output_slot_changed')
+            # Original Steam producer updates only the target's cached word.
+            # An API stop request does not prove that Steam emitted a stop.
+            prior = [r for r in ordered if r['serial'] <= lo and native_payload(r) is not None
+                     and (target_slot is None or r['slot'] == target_slot)]
+            words, expected, baseline_serial = None, None, None
+            if not prior:
+                errors.append('missing_source_baseline')
+            else:
+                baseline = prior[-1]
+                baseline_serial = baseline['serial']
+                payload = native_payload(baseline)
+                words = [payload[2:6], payload[6:10]]
+                if any(s not in records for s in range(baseline_serial, lo + 1)):
+                    errors.append('missing_baseline_trace_records')
+                if any(w not in (NEUTRAL, PULSE) for w in words):
+                    errors.append('unsupported_baseline_for_fixed_pulse_fixture')
+                words[pending['side']] = PULSE
+                expected = b'\x10\0' + b''.join(words)
             expected_flags = 1 if route == 'host_rpc_flags1' else 0
             if pending.get('duration_us') != 1000 or pending.get('flags') != expected_flags:
                 errors.append('unexpected_source_parameters')
@@ -89,16 +111,23 @@ def analyze(requests, capture=(), manifest=None):
                 errors.append('nonzero_packet_count_or_target_mismatch')
             if any(r.get('rc') != 0 for r in window):
                 errors.append('device_error')
-            if len(active) == 1:
+            holds, lateness = [], []
+            if len(active) == 1 and words is not None:
                 samples = [r for r in window if r.get('kind') == 2 and
                            r.get('seq') == active[0]['seq'] and r.get('slot') == active[0]['slot']]
                 if [r['sample'] for r in samples] != [0, 1, 2]:
                     errors.append('missing_or_reordered_samples')
                 else:
+                    holds = [b['sent_ns'] - a['completed_ns'] for a, b in zip(samples, samples[1:])]
+                    lateness = [s['sent_ns'] - s['due_ns'] for s in samples]
+                    if any(hold < 5_000_000 for hold in holds):
+                        errors.append('sample_hold_shorter_than_5ms')
                     for index, sample in enumerate(samples):
                         values = [[0, 160, 0, 320], [0, 160, 0, 320]]
                         if index == 1:
-                            values[pending['side']][0] = 0.0441941731
+                            for side, word in enumerate(words):
+                                if word == PULSE:
+                                    values[side][0] = 0.0441941731
                         actual = sample.get('values', [])
                         if len(actual) != 2 or any(len(v) != 4 for v in actual) or any(
                                 not math.isfinite(a) or abs(a - b) > 5e-8
@@ -107,7 +136,11 @@ def analyze(requests, capture=(), manifest=None):
                         if not (0 < sample.get('due_ns', 0) <= sample.get('sent_ns', 0) <= sample.get('completed_ns', 0)):
                             errors.append('invalid_submission_times')
             intervals.append(dict(route=route, side=pending['side'], ordinal=pending['ordinal'],
-                                  before_serial=lo, after_serial=hi, matched=not errors, errors=errors))
+                                  before_serial=lo, after_serial=hi, baseline_serial=baseline_serial,
+                                  expected_payload=expected.hex() if expected else None,
+                                  minimum_hold_ns=min(holds) if holds else None,
+                                  maximum_lateness_ns=max(lateness) if lateness else None,
+                                  matched=not errors, errors=errors))
             pending, before = None, None
     if pending:
         intervals.append(dict(route=pending['route'], matched=False, reason='missing_after_snapshot'))
@@ -136,10 +169,12 @@ def analyze(requests, capture=(), manifest=None):
                 nonzero_packet_span_ms=(max(timestamps) - min(timestamps)) / 1e6 if timestamps else None,
                 source_request_span_ms=(max(request_times) - min(request_times)) / 1000 if request_times else None,
                 routes=routes, intervals=intervals, conflicting_serials=conflicts,
+                correlated_submission_samples=3 * sum(i['matched'] for i in intervals),
                 device_reply_errors=len(reply_errors), last_inline_counters=stats[-1] if stats else None,
                 last_capture_counters=capture_stats[-1] if capture_stats else None,
                 host_gate_observations=[r for r in requests if r.get('stage') == 'host_gate_state'],
-                game_support_verified=False, physical_fidelity_verified=False, loader_return_verified=False,
+                game_support_verified=False, system_parameter_readback_verified=False,
+                physical_fidelity_verified=False, loader_return_verified=False,
                 limits='Packet presence alone does not attribute effects to this helper. RPC correlation does not verify the public game API route. IPC success is not physical-fidelity proof.')
 
 

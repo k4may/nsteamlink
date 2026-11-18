@@ -146,6 +146,20 @@ python3 tools/analyze-steam-haptics-probe.py --requests requests.jsonl \
 布局/权限错误会报告 unavailable，不写内存、不改偏好。ZIP 另含磁盘配置的
 触觉相关匹配行；这些行不是当前运行时状态证明。机制和边界见 §22.16。
 
+关联器按请求前同 slot 的最近原包恢复两侧缓存；Steam 的单侧 pulse 会保留
+另一侧 word，零时长 API 请求不保证该 word 已清除。因而双侧原包不自动意味着
+串侧，另一侧也不能被任意放行。缺失/未知基线、错误另一侧和短于 5ms 保持
+仍拒绝。可用固定 DLL 的原始编码器另行复核每次完整原包：
+
+```sh
+python3 tools/steam-haptics-routing-audit.py --host /path/to/steamclient64.dll \
+  --requests requests.jsonl --output original-packet-oracle.json
+```
+
+该参数 oracle 使用观测到的前包作为缓存输入、合成的允许条件与时钟，证明
+编码一致性，不能取代真实 gate/cache 读回或证明前次失败的具体原因。主机状态
+result=0 是未找到目标对象，不是触觉开关关闭。详见协议参考 §22.17。
+
 验收需在主机调用时间段看到接受的非零 `0x0d` Nintendo 原包及对应输出；
 普通震动、静音包、主机工具成功退出均不满足该条件。`haptics` 的
 `native_capability_mask` 只表示本地后端支持快照，不是主机已采用该能力的 ACK。
