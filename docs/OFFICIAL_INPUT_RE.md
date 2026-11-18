@@ -1731,3 +1731,56 @@ API 槽位顺序另以 Valve 发布的
 核对：SteamInput006 `+0x110` 为 legacy pulse；这只解释调用入口，不证明
 任何游戏实际调用它。可复核的输入散列、原始反汇编、两版 JSON 报告存于本地
 `build/haptics-host-20261118/`；用户二进制与完整日志不纳入仓库。
+
+### 22.12 放行例外、haptics 偏好与效果来源的区分
+
+**Correction：** 撤回面向用户解释中将“缺少 `0x2000`”概括成“所有原生效果
+都不能发”的表述。§22.10 的门禁只适用于该 pulse 入队函数 flags 低两位为零
+的路径；同节已记录的非零 flags 例外不能省略。也不能将“原生”解释为必须
+由游戏制作 Nintendo 编码，或将单个 legacy pulse producer 的限制扩展为
+Switch 硬件、全部 Steam 后端或全部 `0x0d` 容器的限制。
+
+**Evidence / 放行例外：** 当前 DLL `0x13863795e` 的 `test bpl,3` 非零时，
+跳过 slot `+0x1d1` 检查。既有原始指令对照确认 flags=1/2、pulse-enable=false
+也能入队并输出非零 Nintendo 效果；它证明函数允许该路径，不证明真实游戏
+或某个 UI 操作必定使用这些 flags。额外定位内部调用 `0x13862a810`：
+`0x13862a938..0x13862a98b` 对两个目标各调用一次原始 CSteamController slot
+`+0x50`，参数为 duration=0、flags=2。补充对照执行此原始调用，分别设置
+pulse-enable=false/true，均入队两个 work item、输出两个原生静音包。独立的
+可选设置刷新 predicate 为返回 false 的替身；没有执行完整刷新路径。该调用
+可以解释“开关关闭仍能输出停止”的机制，但没有运行时调用栈，不能断言此前
+两个实机静音包一定来自这个调用。
+
+**Evidence / haptics 偏好：** `SetControllerHapticsSetting` 的 RPC 字符串
+`0x139356820`、dispatch `0x1387d8545` 调用 serialized slot `+0x468`；thunk
+`0x1389c0040` 调用 CSteamController slot `+0x5b8`，即 `0x138632090`。
+该 setter 将 supplied bool 写到待保存 preferences 的 `+0xd4`，即 §22.11
+配置门禁读取的字段。原始偏好构造器 `0x13860e910` 在其子对象 `+0x8c`
+初始化为 true（聚合 preferences 的 `+0xd4`）；序列化 `0x13862f258` 使用
+KeyValues 名 `haptics`。补充对照执行构造器及 setter 的 false/true 两值，
+分别得到默认 true、保存值 `[0,1]`；字符串分配、偏好读取/持久化与释放为
+替身，未读取用户设置，也未确认当前 UI 中的具体入口。不能把它描述成
+DualSense 专属开关，或说用户已试过、当前关闭导致了问题。
+
+**Evidence / 历史边界：** 当前 root/SDK 历史及这轮真机记录没有将 `0x2000`
+加入生产 caps 后故障、再撤销的证据。开启该位的正对照是在离线合成配置中，
+本轮部署的 `bff8af7` 未添加该位。此前移除 `is_generic_gamepad` 导致输入失效
+是 §17 记录的另一变更；motion `0x800` 也是另一能力，不能混为此次 haptics 位。
+
+**Evidence / 不同入口：** legacy pulse work item `0x13862df10` 调用 Generic
+slot `+0x100` 的 Nintendo producer `0x1386953e0`，再通过 `0x0d` 容器输出。
+这些位置不同，但属于同一条调用链。另一个 `TriggerSimpleHapticEvent` work
+item `0x13862dd60` 调用 abstraction slot `+0x160`；当前 Generic vtable
+`0x139318fd0` 的该槽为 `0x1380cf3d0`，只有 `mov al,1; ret`，没有输出。
+原始 worker/实际 vtable 目标的离线对照确认该 no-op；此结论只覆盖此 Generic
+abstraction，不能代替其他硬件后端的实现。因此不能把所有名为 haptic 的
+公共 API 都当作已验证的 Nintendo 非零效果入口。
+
+**Conclusion / 来源：** Nintendo 原生包描述末端格式，不限定谁产生效果。
+游戏可调用抽象触觉 API，由 Steam 编码；Steam Input 也可为输入操作生成
+反馈。Valve 的[输入模式文档](https://partner.steamgames.com/doc/features/steam_controller/input_source_modes?l=english)
+为 mouse/joystick/scroll wheel 等模式列出 Haptics Intensity，不能说 Steam
+自身没有触觉来源。该文档不是 Switch 当前默认布局可触发这些反馈的证明。
+游戏事件的具体触觉设计、Steam 生成的操作反馈、Nintendo 编码和设备执行，
+需要分开验证；普通强度源不能证明恢复了原作者的频率/波形设计。验证非零
+原生链路可以使用受控主机 pulse 源，无须将找到某款游戏作为唯一前提。

@@ -117,7 +117,8 @@ def configuration_gate(pe, caps, haptics_enabled):
 
 
 def route(pe, pulse_enabled=True, flags=0, side=0, duration=1000,
-          enhanced=True, writes_enabled=True, api_entry=False, valid_handle=True):
+          enhanced=True, writes_enabled=True, api_entry=False, valid_handle=True,
+          stop_entry=False):
     m = rumble.gyro.Machine(pe)
     obj, handler, hvtable, device, dvtable = [m.alloc() for _ in range(5)]
     parent = m.alloc(0x110000)
@@ -176,11 +177,20 @@ def route(pe, pulse_enabled=True, flags=0, side=0, duration=1000,
     if api_entry:
         m.allowed += [(address(pe, 0x138721fd0), address(pe, 0x138721fde)),
                       (address(pe, 0x138621660), address(pe, 0x1386216f4))]
+    if stop_entry:
+        if not getattr(pe, 'haptics_november', False):
+            raise ValueError('Stop caller is only identified in the November binary')
+        # Original caller emits duration=0, flags=2 for both sides. Its separate
+        # optional settings-refresh predicate is a substitute returning false.
+        m.stubs[m.read(address(pe, 0x1392d6370) + 0x58)] = lambda: m.ret(0)
+        m.allowed += [(0x13862a810, 0x13862a830), (0x13862a938, 0x13862a999)]
     # Windows x64 args: slot, side, duration, off, repeat, flags.
     m.write(0x4f0008 + 0x28, 0, 2)
     m.write(0x4f0008 + 0x30, 1, 2)
     m.write(0x4f0008 + 0x38, flags, 4)
-    if api_entry:
+    if stop_entry:
+        m.run(0x13862a810, parent, 0)
+    elif api_entry:
         adapter = m.alloc()
         m.write(adapter + 8, parent)
         m.run(address(pe, 0x138721fd0), adapter, 0xfeed, side, duration)
@@ -191,7 +201,70 @@ def route(pe, pulse_enabled=True, flags=0, side=0, duration=1000,
     return dict(pulse_enabled=pulse_enabled, flags=flags, side=side, duration=duration,
                 enhanced=enhanced, writes_enabled=writes_enabled,
                 api_entry=api_entry, synthetic_valid_handle=valid_handle,
+                stop_entry=stop_entry,
                 queued=len(queued), commands=commands)
+
+
+def preference_evidence(pe):
+    """Original preference constructor and SetControllerHapticsSetting setter.
+
+    Current binary only. String allocation, preference lookup/persistence and
+    allocator cleanup are substitutes; no live user's setting or UI is read.
+    """
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    preferences = m.alloc()
+    m.stubs[0x138d243f0] = lambda: m.ret()  # string initializer only
+    m.allowed = [(0x13860e910, 0x13860e9ff)]
+    m.run(0x13860e910, preferences)
+    default = m.read(preferences + 0x8c, 1)
+    if default != 1:
+        raise AssertionError('Unexpected constructor haptics default')
+    obj, vtable, service_holder, service, service_vtable = [m.alloc() for _ in range(5)]
+    m.write(obj, vtable)
+    m.write(vtable + 0x590, 0x480000)
+    m.write(0x1391b74d8, service_holder)
+    m.write(service_holder, service)
+    m.write(service, service_vtable)
+    m.write(service_vtable + 0x38, 0x480010)
+    saved = []
+
+    def persist():
+        saved.append(m.read(m.reg('r9') + 0xd4, 1))
+        m.ret(1)
+
+    m.stubs.update({0x13861b910: lambda: m.ret(1),  # preference lookup succeeds
+                    0x480000: persist, 0x480010: lambda: m.ret()})
+    m.allowed += [(0x138632090, 0x13863214e)]
+    for enabled in (0, 1):
+        m.run(0x138632090, obj, 0, enabled)
+        if m.reg('rax') != 1 or saved[-1] != enabled:
+            raise AssertionError('Haptics setter did not persist supplied boolean')
+    return dict(constructor_haptics_default=bool(default), setter_saved=saved,
+                constructor='0x13860e910', setter='0x138632090',
+                constructor_field='0x8c', aggregate_preference_field='0xd4',
+                boundary=preference_evidence.__doc__.strip())
+
+
+def simple_haptic_evidence(pe):
+    """Current Generic abstraction's simple-event worker; not other backends."""
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    work, obj = m.alloc(), m.alloc()
+    m.write(obj, 0x139318fd0)
+    m.write(obj + 8, 38, 4)
+    m.write(work + 0x78, 3, 4)  # both locations
+    m.write(work + 0x7c, 100, 1)
+    m.write(work + 0x7e, 200, 1)
+    m.allowed = [(0x13862dd60, 0x13862ddc6), (0x1380cf3d0, 0x1380cf3d3)]
+    m.run(0x13862dd60, work, obj)
+    if 0x1380cf3d0 not in m.visited:
+        raise AssertionError('Generic simple-event target was not executed')
+    return dict(worker='0x13862dd60', abstraction_slot='0x160',
+                resolved_function='0x1380cf3d0', function='mov al, 1; ret',
+                no_hid_output=True, boundary=simple_haptic_evidence.__doc__.strip())
 
 
 def main():
@@ -243,6 +316,13 @@ def main():
             if case['queued'] != 1 or case['commands'] != expected_pulse(side):
                 raise AssertionError(case)
             cases.append(case)
+    if pe.haptics_november:
+        neutral = (bytes.fromhex('0d0a00000010000001404000014040') + bytes(54)).hex()
+        for enabled in (False, True):
+            case = route(pe, pulse_enabled=enabled, stop_entry=True)
+            if case['queued'] != 2 or case['commands'] != [neutral, neutral]:
+                raise AssertionError(case)
+            cases.append(case)
     configs = []
     for name,caps,pref,expected in (
             ('current_client_caps',0x834bff,True,False),
@@ -258,6 +338,8 @@ def main():
             raise AssertionError(config)
         configs.append(config)
     report = dict(passed=True,host_sha256=host_sha,cases=cases,configuration_gates=configs,
+                  preference_evidence=preference_evidence(pe),
+                  simple_haptic_evidence=simple_haptic_evidence(pe),
                   original_addresses={
                       'active_config': hex(address(pe, 0x138665a20)),
                       'config_to_slot_fragment': hex(address(pe, 0x13860edae)),
