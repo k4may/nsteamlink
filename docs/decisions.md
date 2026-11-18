@@ -3581,3 +3581,27 @@ D-A107 的离线对照补充：普通输出按固定 Valve SDL 的原始查表�
 本地播放到期不能清除尚未处理的接收历史。源时钟交错、原始 NRO 夹具的 host
 模拟和生产 ARM64 IPC 序列化分别验证；模拟日志必须标明平台，不能认证真实
 HOS IPC。数据表沿用 SDL zlib 许可并随包收集。证据及边界见协议参考 §22.8。
+
+## D-A108：原生震动能力由实际输出后端声明
+
+Evidence：`OFFICIAL_INPUT_RE.md` §22.10–22.12 的两版 Steam 原始指令对照
+证明 legacy pulse 与普通 rumble 有独立门禁，前者通常要求 `0x2000` 和 haptics
+偏好；停止和特殊 flags 有例外。Switch 输出已经通过 D-A107 直接进入 libnx，
+Generic RAW 输入封装和 SDL 设备枚举不意味着输出只能是普通双强度。
+
+Decision：保留 Nintendo 身份、现有 Generic RAW 输入和传感器契约。HID provider
+必须显式报告 native pulse 支持，SDL unmanaged provider 仅在原生 output 回调
+和支持查询都存在、查询为 true 时转交；通用 SDL rumble 不推断该能力。Switch
+owner 刷新连接/样式快照，查询线程只读带锁快照，worker 不进入 SDL/HID 全局
+session。原生 worker 不可用、设备断开或样式不受支持时不声明。该位描述已实现的
+legacy pulse 路由，不承诺任意波形、SimpleHapticEvent 或物理保真。
+
+接收到设备专用效果就原包保存、逐样本解码并走原生输出；接收到普通强度仍走
+libnx 的普通转换。不能通过重复发普通强度、添加尾音/纹理而称为保真。SDL 的
+输出后备适用于没有本项目原生回调的平台；Switch 原生回调失败必须保留错误，
+不递归进入包装过的 SDL rumble 或用成功状态掩盖失败。
+
+受控 Windows 源只使用公开 SteamClient023/SteamInput006 接口，对唯一识别到的
+Switch Pro 请求普通对照及左右各三个 legacy pulse。它不修改 Steam 偏好/布局、
+不使用绕行 flags、不伪装其他手柄，也不附带 Valve DLL。实际 API 请求、Switch
+原包、解码/IPC、系统读回和物理结果分别验收；主机源退出成功不算交付或保真。

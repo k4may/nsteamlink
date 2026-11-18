@@ -24,6 +24,7 @@ typedef struct output {
 } output;
 
 static slot slots[8];
+static bool native_supported[8];
 static pthread_t worker;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake;
@@ -237,6 +238,7 @@ bool sl_rumble_init(void) {
     pthread_mutex_lock(&lock);
     memset(&stats, 0, sizeof(stats));
     memset(slots, 0, sizeof(slots));
+    memset(native_supported, 0, sizeof(native_supported));
     for (unsigned i = 0; i < 8; ++i)
         sl_haptic_init(&slots[i].stream);
 #if NSL_DIAGNOSTICS || defined(NSL_RUMBLE_TEST)
@@ -273,6 +275,7 @@ void sl_rumble_shutdown(void) {
     for (unsigned i = 0; i < 8; ++i) {
         sl_haptic_stop(&slots[i].stream, now_ns());
         slots[i].target.count = 0;
+        native_supported[i] = false;
     }
     pthread_mutex_unlock(&lock);
     pthread_cond_destroy(&wake);
@@ -284,6 +287,30 @@ static u32 location(int index, HidNpadIdType *id) {
     if (index == 0 && (hidGetNpadStyleSet(HidNpadIdType_Handheld) & HidNpadStyleTag_NpadHandheld))
         *id = HidNpadIdType_Handheld;
     return hidGetNpadStyleSet(*id);
+}
+static unsigned actuator_count(u32 style) {
+    return style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual |
+                    HidNpadStyleTag_NpadFullKey) ? 2 :
+        style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight) ? 1 : 0;
+}
+void sl_rumble_refresh_capabilities(void) {
+    for (unsigned i = 0; i < 8; ++i) {
+        HidNpadIdType id;
+        u32 style = location((int)i, &id);
+        bool connected = SDL_JoystickFromInstanceID((int)i) != NULL;
+        pthread_mutex_lock(&lock);
+        native_supported[i] = stats.worker_running && connected && actuator_count(style) != 0;
+        pthread_mutex_unlock(&lock);
+    }
+}
+bool sl_rumble_supports_native_haptics(int32_t index, void *context) {
+    (void)context;
+    if (index < 0 || index >= 8)
+        return false;
+    pthread_mutex_lock(&lock);
+    bool supported = stats.worker_running && native_supported[index];
+    pthread_mutex_unlock(&lock);
+    return supported;
 }
 /* Called under lock; preserve rejected wire bytes as well as accepted input so
  * real-host setup/activation failures remain diagnosable without hot-path IO. */
@@ -316,9 +343,7 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
                               "Invalid Switch vibration command");
     HidNpadIdType id;
     u32 style = location(index, &id);
-    unsigned count = style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual |
-                              HidNpadStyleTag_NpadFullKey) ? 2 :
-        style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight) ? 1 : 0;
+    unsigned count = actuator_count(style);
     if (!count)
         return reject_command((unsigned)index, command, size, received, UINT32_MAX,
                               "No native vibration actuator");
@@ -369,6 +394,7 @@ void sl_rumble_tick(bool active) {
         u32 style = location((int)i, &id);
         bool connected = SDL_JoystickFromInstanceID((int)i) != NULL;
         pthread_mutex_lock(&lock);
+        native_supported[i] = stats.worker_running && connected && actuator_count(style) != 0;
         slot *s = &slots[i];
         if (s->target.count && (!active || !connected || s->target.id != id ||
                                s->target.style != style)) {
@@ -383,8 +409,12 @@ void sl_rumble_tick(bool active) {
 void sl_rumble_get_snapshot(sl_rumble_snapshot *out) {
     pthread_mutex_lock(&lock);
     *out = stats;
-    for (unsigned i = 0; i < 8; ++i)
+    out->native_capability_mask = 0;
+    for (unsigned i = 0; i < 8; ++i) {
         out->stream[i] = slots[i].stream.stats;
+        if (stats.worker_running && native_supported[i])
+            out->native_capability_mask |= 1u << i;
+    }
     pthread_mutex_unlock(&lock);
 }
 size_t sl_rumble_copy_trace(sl_rumble_trace *out, size_t capacity) {

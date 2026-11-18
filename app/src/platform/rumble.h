@@ -10,6 +10,7 @@ typedef struct sl_rumble_snapshot {
     uint64_t trace_overwritten;
     uint64_t canceled_outputs;
     uint32_t io_result;
+    uint32_t native_capability_mask; /* Local support snapshot, not a host ACK. */
     bool worker_running;
 } sl_rumble_snapshot;
 
@@ -29,6 +30,10 @@ void sl_rumble_shutdown(void);
 int sl_rumble_command(int32_t joystick_id, const uint8_t *command, size_t size,
                       uint64_t received_ns, void *context);
 void sl_rumble_tick(bool session_active);
+/* Owner refreshes hardware/style availability; query only reads a locked
+ * snapshot and is safe on the SDK enumeration thread. No motor ACK implied. */
+void sl_rumble_refresh_capabilities(void);
+bool sl_rumble_supports_native_haptics(int32_t joystick_id, void *context);
 void sl_rumble_get_snapshot(sl_rumble_snapshot *out);
 size_t sl_rumble_copy_trace(sl_rumble_trace *out, size_t capacity);
 size_t sl_rumble_read_trace(uint64_t after_serial, sl_rumble_trace *out, size_t capacity);

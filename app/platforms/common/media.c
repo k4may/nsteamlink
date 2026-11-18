@@ -277,6 +277,7 @@ static const IHS_HIDProviderSDLDeviceList HID_DEVICE_LIST = {
     .controller = hid_device_list_controller,
 #ifdef __SWITCH__
     .output = sl_rumble_command,
+    .supportsNativeHaptics = sl_rumble_supports_native_haptics,
 #endif
 };
 
@@ -902,8 +903,12 @@ static void pump_sdl_events(void) {
     }
     if (hid_session) {
         IHS_HIDSDLApplyPendingWrites(hid_session);
-        if (devices_changed)
+        if (devices_changed) {
+#ifdef __SWITCH__
+            sl_rumble_refresh_capabilities();
+#endif
             IHS_SessionHIDNotifyDeviceChange(hid_session);
+        }
     }
     sl_rumble_tick(hid_session != NULL);
     pthread_mutex_unlock(&state_lock);
@@ -1153,6 +1158,9 @@ void stream_media_set_hid_session(IHS_Session *session, bool enabled) {
 
 IHS_HIDProvider *stream_media_create_hid_provider(void) {
     open_hid_controller();
+#ifdef __SWITCH__
+    sl_rumble_refresh_capabilities();
+#endif
     IHS_HIDProvider *provider = IHS_HIDProviderSDLCreateUnmanaged(&HID_DEVICE_LIST, NULL);
     pthread_mutex_lock(&state_lock);
     snapshot.hid_provider_devices = provider != NULL ? hid_device_list_count(NULL) : 0;

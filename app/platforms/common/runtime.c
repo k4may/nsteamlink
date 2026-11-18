@@ -2511,6 +2511,7 @@ static void udp_poll(sl_runtime *r) {
             "\"overflows\":%llu,\"dropped_samples\":%llu,\"late_samples\":%llu,"
             "\"max_lateness_ns\":%llu,\"sends\":%llu,\"send_failures\":%llu,"
             "\"stop_failures\":%llu,\"canceled_outputs\":%llu,\"trace_overwritten\":%llu,\"io_rc\":%u,"
+            "\"native_capability_mask\":%u,"
             "\"source_queued\":%llu,\"source_applied\":%llu,\"source_rejected\":%llu,"
             "\"source_dropped\":%llu,\"source_pending_bytes\":%llu}",
             (unsigned long long)total.commands, (unsigned long long)total.native_commands,
@@ -2521,6 +2522,7 @@ static void udp_poll(sl_runtime *r) {
             (unsigned long long)total.max_lateness_ns, (unsigned long long)s.sends,
             (unsigned long long)s.send_failures, (unsigned long long)s.stop_failures,
             (unsigned long long)s.canceled_outputs, (unsigned long long)s.trace_overwritten, s.io_result,
+            s.native_capability_mask,
             (unsigned long long)q.queued, (unsigned long long)q.applied,
             (unsigned long long)q.rejected, (unsigned long long)q.queueDropped,
             (unsigned long long)q.pendingBytes);

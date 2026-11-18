@@ -82,6 +82,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host
 powershell -NoProfile -ExecutionPolicy Bypass -File .\collect-steam-haptics-host.ps1 -SteamRoot 'D:\Steam' -AppId 1049320
 ```
 
+受控主机源使用 `tools/steam-haptics-probe-win.c`，只通过公开 Steam Input
+接口请求效果，不需要特定游戏提供震动。先运行带 native capability 查询的
+诊断 NRO，并正常连接这台 Steam 主机；采集端运行
+`capture-switch-haptics.py --address <当前设备 IP> --seconds 60 --output <文件>`。
+Windows 测试工具和 `run-steam-haptics-probe.ps1` 放在同一目录后执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run-steam-haptics-probe.ps1
+```
+
+脚本默认 AppID 1049320，仅作为测试进程上下文；不安装/启动该游戏，不编辑
+Steam 布局/偏好。工具只对唯一 Switch Pro handle 发普通对照和六次 legacy
+pulse 请求，并在结束请求归零。桌面生成 ZIP，含调用记录、DLL/工具散列与
+两种主机日志末尾。`--list` 可仅列出 handle/type/remote session ID。Windows
+脚本须以实际执行结果验证；Wine mock 工具通过不表示真实 Steam 可用。
+
+验收需在主机调用时间段看到接受的非零 `0x0d` Nintendo 原包及对应输出；
+普通震动、静音包、主机工具成功退出均不满足该条件。`haptics` 的
+`native_capability_mask` 只表示本地后端支持快照，不是主机已采用该能力的 ACK。
+若主机未枚举到目标或无非零包，保留错误和配置证据，不归因于游戏。
+
 该归档用于匹配真实主机证据；本身不证明游戏支持原生效果。门禁及旧版本原始
 指令对照见协议参考 §22.10。配置收集不到时仍需以实际生效的游戏布局为准。
 

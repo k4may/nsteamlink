@@ -1784,3 +1784,39 @@ abstraction，不能代替其他硬件后端的实现。因此不能把所有名
 游戏事件的具体触觉设计、Steam 生成的操作反馈、Nintendo 编码和设备执行，
 需要分开验证；普通强度源不能证明恢复了原作者的频率/波形设计。验证非零
 原生链路可以使用受控主机 pulse 源，无须将找到某款游戏作为唯一前提。
+
+### 22.13 后端能力声明与受控主机源的实现契约
+
+`IHS_HIDDeviceInfo.native_haptic_pulse` 是 provider 的显式能力；默认 false。
+SDL unmanaged 枚举仅在原生 output callback 与 supportsNativeHaptics query
+均存在、查询为 true 时转交；InfoFromHID 据此加入 `0x2000`。SDL rumble 的
+存在、Nintendo VID/PID 或收到静音效果，都不自动打开它。Switch 的查询只读
+带锁快照；owner 刷新 worker、连接和支持的 Npad 样式，枚举线程不调用 SDL/
+libnx，也不激活马达。样式/worker 快照表示后端可接受相应命令，不是马达
+已安装、IPC 成功或物理保真的 ACK。
+
+该改变保留 `057e:2009`、FeatureCaps Nintendo type、Generic RAW 输入和
+传感器契约。普通 `0x01` 与专用 `0x0d` 仍由原生回调处理并进入 libnx；
+原生回调拒绝不能静默变成成功，也不递归进入被包装的 SDL rumble。其他未
+注册本项目原生回调的平台继续使用 SDL。详见 D-A108。
+
+SDK 的虚拟设备对照从 provider 枚举经过真实 InfoFromHID/protobuf 封装，
+在控制发送边界解包核对 caps：无 output、无 query、query=false 时维持
+`0x8343ff`；明确 native 支持时为 `0x8363ff`（桌面对照不加 Switch motion
+位）。身份字段和 Generic 标志维持枚举输入。Switch 加已有 motion 位后应为
+`0x836bff`；这不是对真实 Steam 活动配置的读回。应用集成对照同时使用真实
+native query、SDK 枚举、原始效果保留及模拟 HID worker 输出。
+
+`tools/steam-haptics-probe-win.c` 使用 Valve 公开的 SteamClient023 与
+SteamInput006 ABI，加载主机自己的 `steamclient64.dll`，不携带 Valve 二进制。
+它只在显式 `--probe` 且 Steam Input 唯一识别到一个 Switch Pro handle 时
+发出一段普通震动与两目标各三个 1000µs legacy pulse 请求；不使用内部 flags
+绕行、不改能力、偏好或布局。普通对照后留 800ms 间隔；结束请求归零、Shutdown、
+ReleaseUser、ReleaseSteamPipe、卸载 DLL。`--list` 仅枚举，无震动请求。
+
+Windows x64 编译及 Wine mock DLL 对照只验证工具 ABI 调用参数、目标选择、
+请求数量和资源释放；mock 不是 Valve 实现，不证明真实 Steam IPC、进程上下文、
+配置或交付成功。真实 Steam Input 是否在该工具进程的 AppID 上下文暴露远程
+handle，须实际验证。`requests_complete_delivery_unverified` 只表示请求调用
+完成，不能替代 Switch trace。主机原始指令离线审计、Windows 工具 mock、
+真实主机运行及设备/机械验收必须分开报告。

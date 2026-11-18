@@ -89,8 +89,22 @@ static int rumble(unsigned low, unsigned high, unsigned ms) {
     return __wrap_SDL_GameControllerRumble((SDL_GameController *)1, low, high, ms);
 }
 int main(void) {
+    assert(!sl_rumble_supports_native_haptics(0, NULL));
     assert(sl_rumble_init());
     styles[32] = HidNpadStyleTag_NpadHandheld;
+    sl_rumble_refresh_capabilities();
+    assert(sl_rumble_supports_native_haptics(0, NULL));
+    assert(!sl_rumble_supports_native_haptics(-1, NULL));
+    assert(!sl_rumble_supports_native_haptics(1, NULL));
+    connected = false;
+    sl_rumble_refresh_capabilities();
+    assert(!sl_rumble_supports_native_haptics(0, NULL));
+    connected = true;
+    styles[32] = 0;
+    sl_rumble_refresh_capabilities();
+    assert(!sl_rumble_supports_native_haptics(0, NULL));
+    styles[32] = HidNpadStyleTag_NpadHandheld;
+    sl_rumble_refresh_capabilities();
     const uint8_t invalid[] = {13};
     assert(sl_rumble_command(0, invalid, sizeof(invalid), 0, NULL) == -1);
     assert(initializes == 0 && snapshot().sends == 0);
@@ -175,6 +189,7 @@ int main(void) {
     sl_rumble_shutdown();
     sl_rumble_snapshot s = snapshot();
     assert(!s.worker_running && s.worker_starts == 1 && s.worker_joins == 1);
+    assert(!sl_rumble_supports_native_haptics(0, NULL));
     assert(initializes > 0);
     /* Reinitialization is tested on the host, with no device time required. */
     assert(sl_rumble_init());

@@ -3,6 +3,8 @@
 #include "ihslib/hid/sdl.h"
 #include "hid/device.h"
 #include "hid/manager.h"
+#include "hid/provider.h"
+#include "ihs_enumeration.h"
 #include "session/session_pri.h"
 #include <SDL.h>
 #include <switch.h>
@@ -53,16 +55,23 @@ int main(void) {
     instance = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
     assert(instance == 0);
     assert(sl_rumble_init());
+    sl_rumble_refresh_capabilities();
     const uint8_t key[32] = {0};
     IHS_ClientConfig config = {.deviceId = 1, .secretKey = key, .deviceName = "Haptics pipeline"};
     IHS_SessionInfo info = {.sessionKeyLen = 32};
     IHS_Session *session = IHS_SessionCreate(&config, &info);
     assert(session);
     IHS_HIDProviderSDLDeviceList list = {.count = device_count, .index = device_index,
-        .instanceId = device_id, .controller = device_controller, .output = sl_rumble_command};
+        .instanceId = device_id, .controller = device_controller, .output = sl_rumble_command,
+        .supportsNativeHaptics = sl_rumble_supports_native_haptics};
     IHS_HIDProvider *provider = IHS_HIDProviderSDLCreateUnmanaged(&list, NULL);
     assert(provider);
     IHS_SessionHIDAddProvider(session, provider);
+    IHS_Enumeration *enumeration = IHS_HIDProviderEnumerateDevices(provider);
+    IHS_HIDDeviceInfo descriptor = {0};
+    IHS_HIDProviderDeviceInfo(provider, enumeration, &descriptor);
+    assert(descriptor.native_haptic_pulse);
+    IHS_EnumerationFree(enumeration);
     IHS_HIDManagedDevice *device = IHS_HIDManagerOpenDevice(session->hidManager, "sdl://0");
     assert(device);
     const uint8_t original[69] = {13, 10, 0, 0, 0, 0x10, 0,
