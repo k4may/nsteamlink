@@ -9,9 +9,23 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct object { void **vtable; } object;
-static void *client_slots[13], *input_slots[46];
-static object client = {client_slots}, input = {input_slots};
+typedef struct object { void **vtable; void *controller; } object;
+static void *client_slots[13];
+#ifdef NSL_MOCK_PRIVATE_LAYOUT
+static struct { char padding[0x1e0]; void *slots[46]; }
+    input_storage __attribute__((section(".nslpub"), aligned(8)));
+static struct { char padding[0xdc0]; void *slots[13]; }
+    controller_storage __attribute__((section(".nslctl"), aligned(8)));
+#define input_slots input_storage.slots
+#define controller_slots controller_storage.slots
+extern int query_fixed(void *, uint32_t, uint64_t *);
+__asm__(".section .nslqry,\"xr\"\n.space 0x9a0,0x90\n.globl query_fixed\nquery_fixed:\njmp query_impl\n.text");
+static object controller = {controller_slots, NULL};
+static void *bad_layout[46];
+#else
+static void *input_slots[46];
+#endif
+static object client = {client_slots, NULL}, input = {input_slots, NULL};
 static unsigned ordinary, pulses[2];
 static bool initialized, shut_down, user_released;
 static const uint64_t handle = UINT64_C(0x112233445566);
@@ -34,15 +48,30 @@ static void run_frame(void *self, bool reserved) {
 }
 static int controllers(void *self, uint64_t *out) {
     assert(self == &input);
+    if (GetEnvironmentVariableA("NSL_MOCK_EMPTY_PUBLIC", NULL, 0)) return 0;
     out[0] = handle;
     return 1;
 }
+#ifdef NSL_MOCK_PRIVATE_LAYOUT
+int query_impl(void *self, uint32_t appid, uint64_t *out) {
+    assert(self == &controller);
+    assert(appid == 0 || appid == 769 || appid == 413080 || appid == 1049320);
+    if (GetEnvironmentVariableA("NSL_MOCK_BAD_COUNT", NULL, 0)) return 17;
+    if (appid == 1049320) return 0;
+    out[0] = handle;
+    if (GetEnvironmentVariableA("NSL_MOCK_MULTIPLE", NULL, 0)) {
+        out[1] = handle + 1;
+        return 2;
+    }
+    return 1;
+}
+#endif
 static int input_type(void *self, uint64_t id) {
-    assert(self == &input && id == handle);
+    assert(self == &input && (id == handle || id == handle + 1));
     return GetEnvironmentVariableA("NSL_MOCK_NO_SWITCH", NULL, 0) ? 4 : 10;
 }
 static uint32_t remote_session(void *self, uint64_t id) {
-    assert(self == &input && id == handle);
+    assert(self == &input && (id == handle || id == handle + 1));
     return 1;
 }
 static void pulse(void *self, uint64_t id, int side, uint16_t duration) {
@@ -87,5 +116,14 @@ __declspec(dllexport) void *CreateInterface(const char *name, int *result) {
     input_slots[34] = pulse;
     input_slots[37] = input_type;
     input_slots[45] = remote_session;
+#ifdef NSL_MOCK_PRIVATE_LAYOUT
+    input.controller = &controller;
+    controller_slots[12] = query_fixed;
+    if (GetEnvironmentVariableA("NSL_MOCK_BAD_METHOD", NULL, 0)) controller_slots[12] = query_impl;
+    if (GetEnvironmentVariableA("NSL_MOCK_BAD_LAYOUT", NULL, 0)) {
+        memcpy(bad_layout, input_slots, sizeof(bad_layout));
+        input.vtable = bad_layout;
+    }
+#endif
     return &client;
 }

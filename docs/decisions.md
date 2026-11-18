@@ -3601,7 +3601,11 @@ libnx 的普通转换。不能通过重复发普通强度、添加尾音/纹理�
 输出后备适用于没有本项目原生回调的平台；Switch 原生回调失败必须保留错误，
 不递归进入包装过的 SDL rumble 或用成功状态掩盖失败。
 
-受控 Windows 源只使用公开 SteamClient023/SteamInput006 接口，对唯一识别到的
-Switch Pro 请求普通对照及左右各三个 legacy pulse。它不修改 Steam 偏好/布局、
-不使用绕行 flags、不伪装其他手柄，也不附带 Valve DLL。实际 API 请求、Switch
+受控 Windows 源通过公开 SteamClient023/SteamInput006 接口请求效果，对唯一
+识别到的 Switch Pro 请求普通对照及左右各三个 legacy pulse。公开枚举按进程
+AppID 过滤；无游戏场景为空时，允许仅在固定 DLL SHA、adapter/controller vtable
+及查询函数 RVA 全部一致后，只读查询已观察的桌面/UI 上下文并去重 handle。
+禁止修改关联数组、游戏上下文全局或偏好来使测试通过。依据见协议参考 §22.14。
+它不修改 Steam 偏好/布局、不使用绕行 flags、不伪装其他手柄，也不附带 Valve DLL。
+实际 API 请求、Switch
 原包、解码/IPC、系统读回和物理结果分别验收；主机源退出成功不算交付或保真。

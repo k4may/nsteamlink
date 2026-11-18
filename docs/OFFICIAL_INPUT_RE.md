@@ -1820,3 +1820,40 @@ Windows x64 编译及 Wine mock DLL 对照只验证工具 ABI 调用参数、目
 handle，须实际验证。`requests_complete_delivery_unverified` 只表示请求调用
 完成，不能替代 Switch trace。主机原始指令离线审计、Windows 工具 mock、
 真实主机运行及设备/机械验收必须分开报告。
+
+### 22.14 真实主机源的空枚举与应用上下文边界
+
+**Evidence：** 用户归档 `nsteamlink-haptics-probe-20261118-114208.zip` 的
+`requests.jsonl` 为 steaminput_ready → probe_requires_exactly_one_switch_pro →
+probe_failed；没有 controller 行或震动请求阶段。manifest exit_code=1，DLL
+仍为 §22.11 的 SHA。controller.txt 同时记录远程 Nintendo 设备打开、桌面
+769/Steam UI 413080 配置激活；测试工具启动时仅暖载 AppID 1049320 的配置。
+设备侧枚举日志 caps=00836bff/nativePulse=1，采集中的成功 10B Nintendo 包
+均为静音；不能称为六次源请求或非零原生交付成功。
+
+**Evidence / 原始代码：** SteamInput006 adapter `0x1387380f0` 从自身 `+8`
+取 IClientController，并将进程 GameID 作为第二参数调用 slot `+0x60`。
+CSteamController 的对应实现 `0x13861a9a0..0x13861ad0b` 对每个有效 handle
+检查最多八项 AppID 关联，不是全局物理设备枚举。adapter 构造器 `0x13873b400`
+将 engine `+0x1a8` 返回对象放入 `+8`；engine 路径 `0x1389a7d2b` 创建原始
+CSteamController（vtable `0x139304dc0`）。这些是区分全局设备存在与进程
+GetConnectedControllers 为空的代码依据，尚不能从日志推断每个内部关联字段值。
+
+**Correction：** 撤回把公开工具 Init 成功理解成“无游戏场景已经具备可用
+handle”的假设。旧工具对空枚举安全退出，但测试没有发出效果；不能要求用户
+更换游戏来掩盖测试器的上下文依赖。
+
+诊断枚举可在固定 DLL SHA、SteamInput006 vtable、其内部 CSteamController
+vtable 和 `+0x60` 函数 RVA 全部相符时，只读查询已观察的桌面/UI 上下文
+（0、769、413080）及指定 AppID，并去重 handle。它不得修改关联数组、进程
+GameID 全局、Steam 配置或采用 pulse 绕行 flags；输出仍调用公开 pulse API。
+所有私有布局不匹配即拒绝，不能猜索引或函数签名。此诊断依赖与通用客户端
+能力/串流实现分开；实际查询结果仍需真实主机验证。
+
+独立执行当前 DLL 的原始过滤函数，以合成缓存包含一个有效 handle、关联
+769/413080 且未关联 1049320 为输入：查询 1049320 返回 0，查询 0/769/413080
+各返回 1。它验证过滤机制，不是实际主机关联读回。Windows 修正版的 Wine
+测试用专门 PE section 固定 mock 的 vtable/方法 RVA；仅测试 EXE 编译时接受
+mock hash，生产 EXE 仍只接受真实主机 SHA。十项对照覆盖正常公开请求、空
+公开列表后的只读上下文查询、只读 list、未知 hash、错误 vtable/函数、越界
+数量、歧义设备、非 Nintendo 与非法 AppID；mock 通过不证明真实 Steam IPC。

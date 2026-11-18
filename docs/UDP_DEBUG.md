@@ -98,6 +98,20 @@ pulse 请求，并在结束请求归零。桌面生成 ZIP，含调用记录、D
 两种主机日志末尾。`--list` 可仅列出 handle/type/remote session ID。Windows
 脚本须以实际执行结果验证；Wine mock 工具通过不表示真实 Steam 可用。
 
+公开手柄枚举按进程 AppID 过滤，工具 Init 成功可能仍列不出桌面串流设备。
+修正版在已核验 DLL SHA/adapter/controller vtable/查询函数 RVA 一致时，另行
+只读查询桌面/UI 的上下文并去重，再通过公开 API 请求效果；不修改关联、布局
+或触觉偏好。未知 DLL/布局即拒绝，不猜控制器索引。`public_controller_count`、
+`context_controller_count` 和布局拒绝阶段可区分这些情况。原始过滤函数的离线
+对照与 Wine 守卫测试不替代真实主机结果。复核工具：
+
+```sh
+python3 tools/test-steam-haptics-probe.py --output build/haptics-probe-mock \
+  --wine-prefix build/haptics-probe-wine
+```
+
+该测试依赖 MinGW/Wine，mock DLL 与允许 mock hash 的测试 EXE 不得放入主机工具包。
+
 验收需在主机调用时间段看到接受的非零 `0x0d` Nintendo 原包及对应输出；
 普通震动、静音包、主机工具成功退出均不满足该条件。`haptics` 的
 `native_capability_mask` 只表示本地后端支持快照，不是主机已采用该能力的 ACK。

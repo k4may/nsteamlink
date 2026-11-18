@@ -267,6 +267,31 @@ def simple_haptic_evidence(pe):
                 no_hid_output=True, boundary=simple_haptic_evidence.__doc__.strip())
 
 
+def context_enumeration_evidence(pe):
+    """Original app association filter with synthetic cache, no live enumeration."""
+    if not getattr(pe, 'haptics_november', False):
+        return None
+    m = rumble.gyro.Machine(pe)
+    obj, out = m.alloc(0x11c000), m.alloc()
+    handle = 0x112233445566
+    m.write(obj + 0x1116d5, 1, 1)
+    m.write(obj + 0x1116d6, handle)
+    m.write(obj + 0x1114d5, 769, 4)
+    m.write(obj + 0x1114d9, 413080, 4)
+    for pc, stub in ((0x13861a9c5, 0x480000), (0x13861acf4, 0x480010)):
+        rumble.indirect(m, pe, pc, lambda: m.ret(), stub)
+    m.allowed = [(0x13861a9a0, 0x13861ad0b)]
+    rows = []
+    for appid, expected in ((1049320, 0), (0, 1), (769, 1), (413080, 1)):
+        m.run(0x13861a9a0, obj, appid, out)
+        count = m.reg('rax')
+        if count != expected or (count and m.read(out) != handle):
+            raise AssertionError('Unexpected original app association filtering')
+        rows.append(dict(appid=appid, count=count))
+    return dict(cases=rows, original_function='0x13861a9a0',
+                boundary=context_enumeration_evidence.__doc__.strip())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', type=Path, required=True)
@@ -340,6 +365,7 @@ def main():
     report = dict(passed=True,host_sha256=host_sha,cases=cases,configuration_gates=configs,
                   preference_evidence=preference_evidence(pe),
                   simple_haptic_evidence=simple_haptic_evidence(pe),
+                  context_enumeration_evidence=context_enumeration_evidence(pe),
                   original_addresses={
                       'active_config': hex(address(pe, 0x138665a20)),
                       'config_to_slot_fragment': hex(address(pe, 0x13860edae)),
