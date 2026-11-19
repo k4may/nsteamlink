@@ -159,6 +159,48 @@ static void spectrum_tests(void) {
     assert(three.metrics.residual_rms[0] > 0.15f); /* Third carrier cannot disappear from metrics. */
     assert(three.metrics.fit_residual_rms[0] > 0.15f);
 }
+static void frequency_boundaries(void) {
+    const uint32_t rates[]={8000,16000,48000};
+    const double frequencies[]={41,42,50,81,82,83,625,626,627,1250,1252,1253};
+    unsigned tested=0, projections=0;
+    for(unsigned rate=0;rate<3;++rate)
+        for(unsigned fmt=SL_PCM_S16LE;fmt<=SL_PCM_F32LE;++fmt)
+            for(unsigned h=0;h<12;++h)
+                for(unsigned phase=0;phase<8;++phase) {
+                    sl_pcm_config c=config(rates[rate],(sl_pcm_format)fmt);
+                    sl_pcm_haptics *s=malloc(sizeof(*s));
+                    unsigned n=rates[rate]*80/1000;
+                    uint8_t *data=calloc(n,8);
+                    assert(s && data && sl_pcm_init(s,&c));
+                    for(unsigned i=0;i<n;++i) {
+                        double angle=2*PI_D*(frequencies[h]*i/rates[rate]+phase/8.0);
+                        store(data,(size_t)i*2,c.format,(float)(.4*sin(angle)));
+                    }
+                    sl_pcm_block b=block(rates[rate],c.format,data,n,0,0);
+                    assert(sl_pcm_push(s,&b)==SL_PCM_OK);
+                    sl_pcm_frame f; bool checked=false;
+                    while(sl_pcm_pop(s,&f)) {
+                        finite_frame(&f);
+                        if(f.flags || f.source_pts_ns!=b.pts_ns+40000000) continue;
+                        sl_hd_value v=f.values[0];
+                        float amplitude=fmaxf(v.amp_low,v.amp_high);
+                        float hz=v.amp_low>v.amp_high?v.freq_low:v.freq_high;
+                        /* Independent sine source amplitude and frequency;
+                         * a sidelobe or near-silent output cannot pass. */
+                        if(fabsf(amplitude-.4f)>=.03f || fabs(hz-frequencies[h])>=6)
+                            fprintf(stderr,"boundary rate=%u fmt=%u hz=%g phase=%u: amplitude=%g carrier=%g\n",
+                                    rates[rate],fmt,frequencies[h],phase,amplitude,hz);
+                        assert(fabsf(amplitude-.4f)<.03f);
+                        assert(fabs(hz-frequencies[h])<6);
+                        assert(!f.values[1].amp_low && !f.values[1].amp_high);
+                        projections+=f.metrics.frequency_projections;
+                        checked=true; ++tested;
+                    }
+                    assert(checked);
+                    free(s); free(data);
+                }
+    assert(tested==576 && projections);
+}
 static void validation_tests(void) {
     sl_pcm_config c = config(8000, SL_PCM_F32LE);
     sl_pcm_haptics *s = malloc(sizeof(*s));
@@ -305,6 +347,7 @@ static void chunk_invariance(void) {
 }
 int main(void) {
     spectrum_tests();
+    frequency_boundaries();
     validation_tests();
     stream_tests();
     chunk_invariance();

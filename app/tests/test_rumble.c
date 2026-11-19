@@ -118,6 +118,10 @@ int main(void) {
     assert(sl_rumble_copy_trace(rejected, 2) == 1);
     assert(rejected[0].kind == 1 && rejected[0].result == UINT32_MAX &&
            rejected[0].size == 1 && rejected[0].command[0] == 13);
+    /* Rejection diagnostics must not dereference a missing payload. */
+    assert(sl_rumble_command(0, NULL, 69, 0, NULL) == -1);
+    assert(sl_rumble_copy_trace(rejected, 2) == 2);
+    assert(rejected[1].result == UINT32_MAX && rejected[1].size == 0);
     assert(rumble(65535, 32768, 30) == 0);
     await_sends(1);
     pthread_mutex_lock(&capture_lock);
@@ -259,5 +263,34 @@ int main(void) {
     assert(sl_rumble_pcm_frame(0, &pcm, monotonic_ns()) == -1);
     assert(snapshot().stream[0].unsupported_effects == 1);
     sl_rumble_shutdown();
+    /* Actual worker: keep IPC failing while stopping the other channel.
+     * Observe attempted parameters before allowing any successful retry. */
+    styles[0] = HidNpadStyleTag_NpadFullKey;
+    for (unsigned failed_trigger=0; failed_trigger<2; ++failed_trigger) {
+        assert(sl_rumble_init());
+        const uint8_t body_on[9]={1,255,255}, trigger_on[9]={6,255,255};
+        const uint8_t body_off[9]={1}, trigger_off[9]={6};
+        assert(sl_rumble_command(0,body_on,9,monotonic_ns(),NULL)==0);
+        await_sends(1);
+        assert(sl_rumble_command(0,trigger_on,9,monotonic_ns(),NULL)==0);
+        await_sends(2);
+        atomic_store(&send_error,123);
+        assert(sl_rumble_command(0,failed_trigger?trigger_on:body_on,9,monotonic_ns(),NULL)==0);
+        for (unsigned i=0;i<500 && !snapshot().send_failures;++i) pause_ms(1);
+        assert(snapshot().send_failures);
+        assert(sl_rumble_command(0,failed_trigger?body_off:trigger_off,9,monotonic_ns(),NULL)==0);
+        bool stopped=false;
+        for (unsigned i=0;i<500 && !stopped;++i) {
+            pthread_mutex_lock(&capture_lock);
+            stopped=failed_trigger ? last[0].amp_low==0 && last[0].amp_high>0 :
+                                     last[0].amp_low>0 && last[0].amp_high==0;
+            pthread_mutex_unlock(&capture_lock);
+            if (!stopped) pause_ms(1);
+        }
+        assert(stopped && atomic_load(&send_error)==123);
+        atomic_store(&send_error,0);
+        sl_rumble_shutdown();
+        assert(snapshot().worker_starts==snapshot().worker_joins);
+    }
     puts("PASS native output worker, three-sample pulse, expiry, device changes, retry and join");
 }

@@ -107,22 +107,24 @@ static void fft(sl_pcm_haptics *s) {
         }
     }
 }
-typedef struct peak { unsigned bin, first, last; float hz, energy; } peak;
+typedef struct peak { unsigned first, last; float hz, strength; bool projected; } peak;
 static float energy(const sl_pcm_haptics *s, unsigned first, unsigned last) {
     return first > last ? 0 : fmaxf(0, s->prefix[last + 1] - s->prefix[first]);
 }
 static bool low_valid(float hz) { return hz >= 41 && hz <= 626; }
 static bool high_valid(float hz) { return hz >= 82 && hz <= 1253; }
 
-/* FFT chooses the two frequencies. A bounded 2/4-basis least-squares fit
+/* FFT chooses the two frequencies. A bounded 3/5-basis least-squares fit
  * estimates amplitudes without treating Hann sidelobes as extra motor energy.
+ * The constant nuisance basis removes DC jointly: subtracting the raw mean
+ * alone biases low tones spanning a non-integer number of window cycles.
  * Oscillator recurrence avoids a per-Hz bank or per-sample trig calls. Phase
  * is used ONLY in this error model; HidVibrationValue has no phase field. */
 static bool fit(sl_pcm_haptics *s, unsigned side, float mean, const float hz[2],
                 const bool active[2], float amplitude[2], float *residual) {
-    double gram[4][4] = {{0}}, rhs[4] = {0}, augmented[4][5] = {{0}};
+    double gram[5][5] = {{0}}, rhs[5] = {0}, augmented[5][6] = {{0}};
     double cs[2] = {1, 1}, sn[2] = {0}, dc[2] = {0}, ds[2] = {0};
-    unsigned dimensions = 0, map[2] = {0, 0};
+    unsigned dimensions = 1, map[2] = {0, 0};
     for (unsigned band = 0; band < 2; ++band) {
         if (!active[band]) continue;
         map[band] = dimensions;
@@ -135,7 +137,7 @@ static bool fit(sl_pcm_haptics *s, unsigned side, float mean, const float hz[2],
     for (unsigned i = 0; i < s->window; ++i) {
         unsigned at = (s->write_index + i) % s->window;
         double x = s->history[side][at] * s->config.gain - mean;
-        double weight = (double)s->taper[i] * s->taper[i], basis[4] = {0};
+        double weight = (double)s->taper[i] * s->taper[i], basis[5] = {1};
         power += weight * x * x;
         for (unsigned band = 0; band < 2; ++band) {
             if (!active[band]) continue;
@@ -227,7 +229,7 @@ static void analyze_side(sl_pcm_haptics *s, unsigned side, sl_pcm_frame *frame) 
     unsigned count = 0;
     unsigned radius = (2 * n + s->window - 1) / s->window;
     for (unsigned i = 1; i < half; ++i) {
-        if ((float)i * step < 41 - step / 2 || (float)i * step > 1253 + step / 2) continue;
+        if ((float)i * step < 41 - step || (float)i * step > 1253 + step) continue;
         if (s->power[i] <= 1e-12f || s->power[i] < s->power[i - 1] ||
             s->power[i] <= s->power[i + 1]) continue;
         float a = logf(fmaxf(s->power[i - 1], 1e-30f));
@@ -236,17 +238,29 @@ static void analyze_side(sl_pcm_haptics *s, unsigned side, sl_pcm_frame *frame) 
         float denominator = a - 2 * b + c;
         float delta = denominator != 0 ? 0.5f * (a - c) / denominator : 0;
         delta = fmaxf(-0.5f, fminf(0.5f, delta));
-        peak p = {.bin = i, .first = i > radius ? i - radius : 0,
+        peak p = {.first = i > radius ? i - radius : 0,
                   .last = i + radius < half ? i + radius : half,
                   .hz = ((float)i + delta) * step};
-        if (!low_valid(p.hz) && !high_valid(p.hz)) continue;
-        p.energy = energy(s, p.first, p.last);
+        /* A finite-window estimate at a legal boundary can straddle that
+         * boundary. Keep its nearest representable carrier within one
+         * FFT bin instead of turning a strong legal tone into silence.
+         * This also approximates indistinguishably close out-of-band tones;
+         * expose the projection and retain fit/out-of-band error metrics. */
+        if (p.hz < 41 || p.hz > 1253) {
+            if (p.hz < 41 - step || p.hz > 1253 + step) continue;
+            p.hz = fmaxf(41, fminf(1253, p.hz));
+            p.projected = true;
+        }
+        /* Rank local maxima by their own bin, not a wide neighborhood. At
+         * a passband edge, a sidelobe's neighborhood can borrow the main
+         * lobe's legal bins and otherwise outrank that actual carrier. */
+        p.strength = s->power[i];
         unsigned at = count;
         if (at == PEAKS) {
-            if (p.energy <= peaks[at - 1].energy) continue;
+            if (p.strength <= peaks[at - 1].strength) continue;
             --at;
         } else ++count;
-        while (at && p.energy > peaks[at - 1].energy) { peaks[at] = peaks[at - 1]; --at; }
+        while (at && p.strength > peaks[at - 1].strength) { peaks[at] = peaks[at - 1]; --at; }
         peaks[at] = p;
     }
     int best_low = -1, best_high = -1;
@@ -256,13 +270,8 @@ static void analyze_side(sl_pcm_haptics *s, unsigned side, sl_pcm_frame *frame) 
         for (int high = -1; high < (int)count; ++high) {
             if (high >= 0 && !high_valid(peaks[high].hz)) continue;
             if (low >= 0 && high >= 0 && peaks[high].hz - peaks[low].hz < 50) continue;
-            float score = low < 0 ? 0 : peaks[low].energy;
-            if (high >= 0) score += peaks[high].energy;
-            if (low >= 0 && high >= 0) {
-                unsigned first = peaks[low].first > peaks[high].first ? peaks[low].first : peaks[high].first;
-                unsigned last = peaks[low].last < peaks[high].last ? peaks[low].last : peaks[high].last;
-                score -= energy(s, first, last);
-            }
+            float score = low < 0 ? 0 : peaks[low].strength;
+            if (high >= 0) score += peaks[high].strength;
             if (score > best) { best = score; best_low = low; best_high = high; }
         }
     }
@@ -277,6 +286,7 @@ static void analyze_side(sl_pcm_haptics *s, unsigned side, sl_pcm_frame *frame) 
         int index = indices[band];
         if (index < 0) continue;
         peak p = peaks[index];
+        frame->metrics.frequency_projections += p.projected;
         if (best_low >= 0 && best_high >= 0) {
             if (!band && p.last > midpoint) p.last = midpoint;
             if (band && p.first <= midpoint) p.first = midpoint + 1;
@@ -351,9 +361,10 @@ sl_pcm_result sl_pcm_push(sl_pcm_haptics *s, const sl_pcm_block *b) {
     if ((uint64_t)b->frames + pad > UINT64_MAX - before) return SL_PCM_BAD_TIMESTAMP;
     uint64_t after = before + b->frames + pad;
     uint64_t actual = reset ? b->frames : s->received_frames + b->frames;
-    uint64_t base = reset ? b->pts_ns : s->base_pts_ns, latest;
+    uint64_t base = reset ? b->pts_ns : s->base_pts_ns, latest, end_pts;
     if (actual > UINT64_MAX - s->window / 2 ||
-        !pts_at(base, actual + s->window / 2, b->sample_rate, &latest)) return SL_PCM_BAD_TIMESTAMP;
+        !pts_at(base, actual + s->window / 2, b->sample_rate, &latest) ||
+        !pts_at(base, actual, b->sample_rate, &end_pts)) return SL_PCM_BAD_TIMESTAMP;
     uint64_t outputs = due(s, after) - due(s, before) + (reset ? 1u : 0u) +
                        ((b->flags & SL_PCM_EOS) ? 1u : 0u);
     if (outputs + (reset ? 0 : s->count) > s->config.queue_frames) return SL_PCM_QUEUE_FULL;
@@ -376,10 +387,7 @@ sl_pcm_result sl_pcm_push(sl_pcm_haptics *s, const sl_pcm_block *b) {
     s->next_sequence = b->sequence + 1;
     if (b->flags & SL_PCM_EOS) {
         for (unsigned i = 0; i < pad; ++i) feed(s, 0, 0, b->sequence);
-        uint64_t end_pts, stop_available;
-        (void)pts_at(s->base_pts_ns, actual, b->sample_rate, &end_pts);
-        (void)pts_at(s->base_pts_ns, actual + s->window / 2, b->sample_rate, &stop_available);
-        quiet_frame(s, b->sequence, end_pts, stop_available, SL_PCM_FRAME_EOS);
+        quiet_frame(s, b->sequence, end_pts, latest, SL_PCM_FRAME_EOS);
         s->ended = true;
     }
     return SL_PCM_OK;

@@ -52,6 +52,9 @@ typedef struct sl_pcm_metrics {
     float residual_rms[2], fit_residual_rms[2], output_rms[2], rms_error[2], hop_rms_error[2];
     float requested_amplitude[2][2]; /* Before target amplitude limiting. */
     unsigned limited_bands, fit_failures;
+    /* Selected estimates projected to 41/1253Hz within one FFT bin.
+     * Finite windows cannot perfectly separate nearby out-of-band sources. */
+    unsigned frequency_projections;
 } sl_pcm_metrics;
 
 typedef struct sl_pcm_frame {
@@ -99,6 +102,8 @@ bool sl_pcm_init(sl_pcm_haptics *s, const sl_pcm_config *config);
  * across that window; hop_rms_error exposes the 5 ms energy discrepancy.
  * Arbitrary PCM, phase and broadband/transient detail cannot be reproduced
  * by two carriers. No automatic normalization or invented gain correction.
+ * Estimates straddling the legal frequency edges by <=one FFT bin are
+ * projected to the nearest edge and counted, rather than silently dropped.
  * Input format/rate support here is NOT a Steam PCM wire/source capability.
  * Run bounded analysis off rendering/input and actuator deadline hot paths. */
 sl_pcm_result sl_pcm_push(sl_pcm_haptics *s, const sl_pcm_block *block);

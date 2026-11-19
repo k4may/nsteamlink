@@ -307,27 +307,49 @@ static bool is_silent(const sl_haptic_frame *f) {
     return !f->values[0].amp_low && !f->values[0].amp_high &&
            !f->values[1].amp_low && !f->values[1].amp_high;
 }
-/* An explicit same-channel stop must never wait behind a failed nonzero IPC.
- * Independent-channel updates remain ordered; newer future effects survive. */
+static bool stops_component(const sl_hd_value old[2], const sl_haptic_frame *f) {
+    for (unsigned i = 0; i < 2; ++i)
+        if ((old[i].amp_low && !f->values[i].amp_low) ||
+            (old[i].amp_high && !f->values[i].amp_high)) return true;
+    return false;
+}
+/* A failed IPC contains the composition of BOTH channels. A due stop on
+ * either channel must remove that channel before retrying. For the other
+ * channel's stop, keep the failed frame's identity/deadline: it is still a
+ * retry, including the native sample's completion-based minimum hold. */
 static bool stop_failed_output(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) {
-    bool trigger = s->current.source == SL_HAPTIC_TRIGGERS;
+    bool failed_trigger = s->current.source == SL_HAPTIC_TRIGGERS;
     for (unsigned n = 0; n < s->count; ++n) {
         sl_haptic_frame f = *at(s, n);
         if (f.due_ns > now) break;
-        if ((f.source == SL_HAPTIC_TRIGGERS) != trigger || !is_silent(&f)) continue;
+        bool trigger = f.source == SL_HAPTIC_TRIGGERS;
+        sl_hd_value *values = trigger ? s->triggers : s->body;
+        if (!is_silent(&f) && (sampled(&f) || !stops_component(values, &f))) continue;
         unsigned kept = 0;
         for (unsigned j = 0; j < s->count; ++j) {
             sl_haptic_frame q = *at(s, j);
             if (j <= n && (q.source == SL_HAPTIC_TRIGGERS) == trigger) {
                 if (j != n) ++s->stats.dropped_frames;
-                s->stats.superseded_samples += q.native;
+                if (j != n || trigger != failed_trigger)
+                    s->stats.superseded_samples += q.native;
             } else *at(s, kept++) = q;
         }
         s->count = kept;
+        memcpy(values, f.values, sizeof(f.values));
+        uint64_t expires = !is_silent(&f) && f.duration_ns ? add(now, f.duration_ns) : 0;
+        if (trigger) {
+            s->trigger_expires_ns = expires;
+            s->trigger_expiry_source_ns = add(f.source_ns, f.duration_ns);
+        } else {
+            s->expires_ns = expires;
+            s->body_expiry_source_ns = add(f.source_ns, f.duration_ns);
+        }
+        if (trigger != failed_trigger) {
+            compose(s, &s->current);
+            *out = s->current;
+            return true;
+        }
         s->stats.superseded_samples += s->current.native;
-        sl_hd_value *values = trigger ? s->triggers : s->body;
-        values[0] = values[1] = silence();
-        if (trigger) s->trigger_expires_ns = 0; else s->expires_ns = 0;
         compose(s, &f); s->current = f; s->dirty = false;
         ++s->stats.scheduled_frames;
         if (f.native) { ++s->stats.scheduled_samples; s->last_sample_ns = now; }
@@ -355,7 +377,6 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
     if (s->dirty) {
         s->dirty = false;
         bool expired = expired_at != 0;
-        if (s->current.source != SL_HAPTIC_RESET && stop_failed_output(s, now, out)) return true;
         bool stale_retry = s->current.source != SL_HAPTIC_RESET &&
             now > add(s->current.source_ns, SL_HAPTIC_MAX_LATENCY_NS);
         if (stale_retry) {
@@ -366,6 +387,7 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
                                          .sequence = s->stats.commands};
             compose(s, &s->current); *out = s->current; return true;
         }
+        if (s->current.source != SL_HAPTIC_RESET && stop_failed_output(s, now, out)) return true;
         if (!expired || s->current.source == SL_HAPTIC_RESET) { *out = s->current; return true; }
     }
     bool stale = false;

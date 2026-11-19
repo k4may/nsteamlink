@@ -320,11 +320,11 @@ static void record_command(unsigned index, const uint8_t *command, size_t size,
                             uint64_t received, uint64_t applied, Result result) {
     sl_rumble_trace t = {.kind = 1, .slot = index, .received_ns = received,
         .submitted_ns = applied, .sequence = slots[index].stream.stats.commands,
-        .size = size <= 69 ? (unsigned)size : 0, .result = result};
+        .size = command && size <= 69 ? (unsigned)size : 0, .result = result};
     if (command && t.size)
         memcpy(t.command, command, t.size);
-    t.source = size && command[0] == 6 ? SL_HAPTIC_TRIGGERS :
-        size && command[0] == 13 ? (size > 1 && command[1] == 47 ? SL_HAPTIC_SONY : SL_HAPTIC_NINTENDO) : SL_HAPTIC_BODY;
+    t.source = command && size && command[0] == 6 ? SL_HAPTIC_TRIGGERS :
+        command && size && command[0] == 13 ? (size > 1 && command[1] == 47 ? SL_HAPTIC_SONY : SL_HAPTIC_NINTENDO) : SL_HAPTIC_BODY;
     t.unsupported = slots[index].stream.last_unsupported;
     record(&t);
 }
