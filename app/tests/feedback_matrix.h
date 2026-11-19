@@ -36,7 +36,10 @@ static bool run_feedback_matrix(IHS_HIDManagedDevice *device, IHS_Session *sessi
     observe(handles, devices, UINT64_C(30000000));
     note->write_ok &= IHS_HIDDeviceWrite(device->device, stop, sizeof(stop)) == 0;
     ++sequence;
+    matrix_interleave_output = true;
+    matrix_callbacks = 0;
     IHS_HIDSDLApplyPendingWrites(session);
+    matrix_interleave_output = false;
     observe(handles, devices, UINT64_C(45000000));
     note->end_ns = now_ns();
     ok &= note->write_ok;

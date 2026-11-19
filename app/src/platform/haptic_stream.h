@@ -40,6 +40,7 @@ typedef struct sl_haptic_stream {
     sl_haptic_frame current, queue[SL_HAPTIC_QUEUE];
     unsigned head, count;
     uint64_t expires_ns, wire_expires_ns, source_epoch, playback_epoch, last_sample_ns;
+    uint64_t batch_cutoff_ns;
     bool dirty, source_epoch_valid;
     sl_hd_value body[2], triggers[2];
     uint64_t trigger_expires_ns, body_expiry_source_ns, trigger_expiry_source_ns;

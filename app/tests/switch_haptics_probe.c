@@ -61,8 +61,32 @@ static int count(void *p) { (void)p; return controller ? 1 : 0; }
 static int index_of(SDL_JoystickID id, void *p) { (void)p; return id == joystick_id ? 0 : -1; }
 static SDL_JoystickID id_at(int i, void *p) { (void)i; (void)p; return joystick_id; }
 static SDL_GameController *controller_at(int i, void *p) { (void)p; return i == 0 ? controller : NULL; }
+#ifdef NSL_FEEDBACK_MATRIX
+static bool matrix_interleave_output;
+static unsigned matrix_callbacks;
+static int matrix_output(int32_t id, const uint8_t *data, size_t size,
+                         uint64_t received, void *context) {
+    if (!matrix_interleave_output) return sl_rumble_command(id, data, size, received, context);
+    sl_rumble_snapshot before, after;
+    sl_rumble_get_snapshot(&before);
+    int result = sl_rumble_command(id, data, size, received, context);
+    if (!matrix_callbacks++ && result == 0 && id >= 0 && id < 8) {
+        uint64_t until = now_ns() + UINT64_C(100000000);
+        do {
+            sl_rumble_get_snapshot(&after);
+            if (after.stream[id].emitted_frames > before.stream[id].emitted_frames) break;
+            struct timespec wait = {.tv_nsec = 500000};
+            nanosleep(&wait, NULL);
+        } while (now_ns() < until);
+    }
+    return result;
+}
+#define PROBE_OUTPUT matrix_output
+#else
+#define PROBE_OUTPUT sl_rumble_command
+#endif
 static const IHS_HIDProviderSDLDeviceList list = {.count = count, .index = index_of,
-    .instanceId = id_at, .controller = controller_at, .output = sl_rumble_command,
+    .instanceId = id_at, .controller = controller_at, .output = PROBE_OUTPUT,
     .outputDiscontinuity = sl_rumble_discontinuity};
 
 static void observe(HidVibrationDeviceHandle handles[2], unsigned devices, uint64_t duration_ns) {

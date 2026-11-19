@@ -223,10 +223,11 @@ def _analyze(records):
     first = next((r for r in sends if r["seq"] == 1), None)
     second = next((r for r in sends if r["seq"] == 2), None)
     received_gap = commands[1]["received_ns"] - commands[0]["received_ns"]
-    played_gap = second["sent_ns"] - first["completed_ns"] if first and second else 0
+    played_gap = second["sent_ns"] - first["sent_ns"] if first and second else 0
+    interleaved = first is not None and first["completed_ns"] <= commands[1]["apply_ns"]
     batch_ok = first is not None and second is not None and received_gap >= 30_000_000 and \
         commands[0]["apply_ns"] >= commands[1]["received_ns"] and \
-        received_gap <= played_gap <= received_gap + 25_000_000
+        interleaved and received_gap <= played_gap <= received_gap + 25_000_000
     if not batch_ok:
         errors.append("ordinary batch did not preserve its received on/off interval")
     pulse = [r for r in sends if r["seq"] == 12]
@@ -294,6 +295,8 @@ def _analyze(records):
                 commands=len(commands), output_frames=len(sends), native_samples=len(pulse)+1,
                 all_stimuli_and_outputs_match=stimulus_match and output_match,
                 batched_ordinary_interval_preserved=batch_ok, ordinary_received_interval_ns=received_gap,
+                owner_worker_interleave_verified=interleaved,
+                ordinary_after_completion_interval_ns=second["sent_ns"]-first["completed_ns"] if first and second else 0,
                 ordinary_played_interval_ns=played_gap, native_sample_spacing_verified=native_spacing,
                 ipc_submission_verified=software_ok and platform == "switch",
                 parameter_readback_values_match=readback_ok, ipc_readback_matched_frames=matched,

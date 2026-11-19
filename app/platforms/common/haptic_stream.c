@@ -68,9 +68,14 @@ static void space_pending(sl_haptic_stream *s, uint64_t after) {
 static uint64_t map_time(sl_haptic_stream *s, uint64_t received, uint64_t now) {
     /* A fresh batch gets its own bounded playback anchor. Once queued, all
      * events in that batch keep their original receive-time differences. */
-    if (!s->count) {
+    /* Queue emptiness is not a batch boundary: the output worker may take
+     * the first frame while the owner is still draining older arrivals.
+     * Only an arrival newer than that drain's initial local cutoff starts
+     * a fresh idle anchor. This also lets genuine idle gaps absorb jitter. */
+    if (!s->count && (!s->source_epoch_valid || received > s->batch_cutoff_ns)) {
         s->source_epoch = received;
         s->playback_epoch = now;
+        s->batch_cutoff_ns = now;
         s->source_epoch_valid = true;
     }
     uint64_t due = add(s->playback_epoch,
@@ -298,6 +303,17 @@ void sl_haptic_output_complete(sl_haptic_stream *s, const sl_haptic_frame *f,
         return;
     if (!success) s->dirty = true;
     else {
+        /* A successful ordinary/trigger/Sony frame can itself be selected
+         * late. Preserve its source gap for backlog callbacks admitted after
+         * the worker emptied the queue, just as for already queued frames.
+         * Do not let completion of an older in-flight batch re-anchor a new
+         * live batch, or add IPC duration to the source-to-submit intervals. */
+        if (!sampled(f) && f->source != SL_HAPTIC_RESET && f->source != SL_HAPTIC_EXPIRY &&
+            s->source_epoch_valid && f->source_ns >= s->source_epoch) {
+            s->source_epoch = f->source_ns;
+            s->playback_epoch = submitted;
+            if (submitted > s->batch_cutoff_ns) s->batch_cutoff_ns = submitted;
+        }
         if (sampled(f) && completed > s->last_sample_ns) s->last_sample_ns = completed;
         if (f->source != SL_HAPTIC_RESET && f->source != SL_HAPTIC_TRIGGERS)
             space_pending(s, sampled(f) ? completed : submitted);

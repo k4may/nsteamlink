@@ -107,13 +107,26 @@ static Result io_send(native_io *io, const binding *b, const sl_hd_value values[
 static Result emit(native_io *io, const output *o) {
     if (!o->stop) {
         pthread_mutex_lock(&lock);
-        const slot *s = &slots[o->slot];
+        slot *s = &slots[o->slot];
         bool current = !stopping && s->target.generation == o->target.generation &&
             s->stream.current.sequence == o->frame.sequence &&
             s->stream.current.sample == o->frame.sample &&
             s->stream.current.native == o->frame.native &&
             s->stream.current.source == o->frame.source &&
             s->stream.current.due_ns == o->frame.due_ns;
+        uint64_t before_submit = now_ns();
+        bool expired = (s->stream.expires_ns && s->stream.expires_ns <= before_submit) ||
+            (s->stream.trigger_expires_ns && s->stream.trigger_expires_ns <= before_submit);
+        bool stale = o->frame.source != SL_HAPTIC_RESET && o->frame.source != SL_HAPTIC_EXPIRY &&
+            before_submit > o->frame.source_ns &&
+            before_submit - o->frame.source_ns > SL_HAPTIC_MAX_LATENCY_NS;
+        if (current && (expired || stale)) {
+            /* Another slot's IPC or scheduling can delay a selected job.
+             * Re-enter the state machine before sending any old nonzero:
+             * it handles expiry/stale reset and any newer queued events. */
+            s->stream.dirty = true;
+            current = false;
+        }
         if (!current)
             ++stats.canceled_outputs;
         pthread_mutex_unlock(&lock);

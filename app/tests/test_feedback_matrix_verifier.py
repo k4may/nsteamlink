@@ -60,7 +60,7 @@ def fixture(platform="host-simulation"):
         for seq in range(first, last + 1):
             source = 2 if seq in (4, 5, 6, 8) else 3 if seq in (9, 10, 11) else 1 if seq in (12, 13) else 0
             received = begin + 100_000 + (30_000_000 if seq == 2 else 0)
-            apply = begin + (30_200_000 if seq == 1 else 30_210_000 if seq == 2 else 200_000)
+            apply = begin + (30_200_000 if seq == 1 else 30_230_000 if seq == 2 else 200_000)
             trace.append(dict(stage="command", slot=0, seq=seq, received_ns=received, apply_ns=apply,
                               source=source, unsupported={10: 4, 11: 2}.get(seq, 0), rc=0,
                               wire=inputs[seq-1].hex()))
@@ -114,6 +114,7 @@ class FeedbackMatrixVerifierTests(unittest.TestCase):
                 self.assertTrue(report["software_path_verified"], report)
                 self.assertTrue(report["parameter_readback_values_match"])
                 self.assertTrue(report["batched_ordinary_interval_preserved"])
+                self.assertTrue(report["owner_worker_interleave_verified"])
                 self.assertTrue(report["native_sample_spacing_verified"])
                 self.assertEqual(report["ipc_readback_matched_frames"], 16)
                 self.assertEqual(report["ipc_submission_verified"], platform == "switch")
@@ -121,6 +122,19 @@ class FeedbackMatrixVerifierTests(unittest.TestCase):
                 self.assertEqual(report["stopped_ipc_readback_verified"], platform == "switch")
                 self.assertFalse(report["physical_fidelity_verified"])
                 self.assertFalse(report["loader_return_verified"])
+
+    def test_ordinary_submission_gap_excludes_ipc_duration(self):
+        records=fixture()
+        first=row(records,"send",1)
+        first["completed_ns"]=first["sent_ns"]+2_000_000
+        row(records,"command",2)["apply_ns"]=first["completed_ns"]+100_000
+        report=verifier.analyze(records)
+        self.assertTrue(report["software_path_verified"],report)
+        self.assertLess(report["ordinary_after_completion_interval_ns"],report["ordinary_received_interval_ns"])
+        # A batch without the forced worker-between-callbacks edge is weaker
+        # evidence, even if its parameters and source gap happen to match.
+        row(records,"command",2)["apply_ns"]=row(records,"command",1)["apply_ns"]
+        self.reject(records)
 
     def test_structure_and_stimulus_rejections(self):
         for case in ("matrix", "platform", "begin", "missing_command", "duplicate_joined", "case_order",

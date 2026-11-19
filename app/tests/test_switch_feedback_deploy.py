@@ -36,6 +36,7 @@ def fixture(platform="switch"):
         for seq in range(first, last+1):
             received = start + (1_000_000 if seq != 2 else 41_000_000)
             applied = start + (41_000_000 if index == 0 else 2_000_000)
+            if seq == 2: applied = start + 43_000_000
             commands.append(dict(stage="command", slot=0, seq=seq, received_ns=received,
                                  apply_ns=applied, rc=0, unsupported={10:4, 11:2}.get(seq, 0),
                                  source=2 if seq in (4, 5, 6, 8) else 3 if seq in (9, 10, 11) else

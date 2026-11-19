@@ -558,6 +558,13 @@ join/归零，拒绝旧Nintendo-only夹具冒充新矩阵。普通/trigger输入
 SDK规范化为9B语义命令；matrix不认证被忽略的padding。Nintendo与Sony容器仍
 按完整69B核对。参数读回与机械效果分别报告。
 
+矩阵首组在第一条实际输出完成后才让第二条owner回调继续，强制覆盖队列
+暂空的线程交错；`owner_worker_interleave_verified` 从输出完成/第二条apply
+时间记录计算。旧日志不满足该顺序时不得认证为这项回归通过。普通的
+`ordinary_played_interval_ns` 按submit-to-submit与接收间隔核对；另列
+`ordinary_after_completion_interval_ns`，不能把IPC耗时误加为普通间隔的
+要求。Nintendo的5ms最低保持仍按上一提交完成时刻核对。
+
 串流客户端的 `haptics` 追加 ordinary_commands/trigger_commands/sony_commands、
 适配/不可还原、替换/丢失/过期/失步、PCM本地帧等计数；
 `pcm_steam_source_ready=false` 表示没有声明Steam专用PCM来源。

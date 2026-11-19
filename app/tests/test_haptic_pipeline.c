@@ -24,6 +24,8 @@ static pthread_mutex_t hid_lock = PTHREAD_MUTEX_INITIALIZER;
 static HidVibrationValue hid_outputs[HID_OUTPUT_CAPACITY][2];
 static unsigned hid_output_count;
 static unsigned queued_commands;
+static bool interleave_output;
+static unsigned interleave_callbacks;
 static int device_count(void *p) { (void)p; return 1; }
 static int device_index(SDL_JoystickID id, void *p) { (void)p; return id == instance ? 0 : -1; }
 static SDL_JoystickID device_id(int i, void *p) { (void)i; (void)p; return instance; }
@@ -62,6 +64,16 @@ static void await_output(unsigned before) {
         pause_ms(1);
     }
     assert(!"worker did not submit the queued effect");
+}
+/* Delegate to the production frontend, but hold the owner's first callback
+ * until the actual output worker has run. This makes the SDK batch race
+ * deterministic rather than relying on favorable OS thread scheduling. */
+static int output_with_interleave(int32_t id, const uint8_t *data, size_t size,
+                                  uint64_t received, void *context) {
+    unsigned before=output_count();
+    int result=sl_rumble_command(id,data,size,received,context);
+    if(interleave_output && !interleave_callbacks++) await_output(before);
+    return result;
 }
 static void assert_output(unsigned index, float left_low, float left_high,
                            float right_low, float right_high) {
@@ -106,7 +118,7 @@ int main(void) {
     IHS_Session *session = IHS_SessionCreate(&config, &info);
     assert(session);
     IHS_HIDProviderSDLDeviceList list = {.count = device_count, .index = device_index,
-        .instanceId = device_id, .controller = device_controller, .output = sl_rumble_command,
+        .instanceId = device_id, .controller = device_controller, .output = output_with_interleave,
         .outputDiscontinuity = sl_rumble_discontinuity,
         .supportsNativeHaptics = sl_rumble_supports_native_haptics};
     IHS_HIDProvider *provider = IHS_HIDProviderSDLCreateUnmanaged(&list, NULL);
@@ -161,6 +173,32 @@ int main(void) {
         previous = trace[i].completed_ns;
         ++samples;
     }
+    /* Both source events arrived before draining. The first callback waits
+     * for the real worker, emptying the queue before the SDK applies stop. */
+    const uint8_t batch_on[9]={1,255,255}, batch_off[9]={1};
+    unsigned batch_before=output_count();
+    sl_rumble_snapshot batch_stats; sl_rumble_get_snapshot(&batch_stats);
+    uint64_t first_sequence=batch_stats.stream[0].commands+1;
+    queue(device,batch_on,sizeof(batch_on));
+    pause_ms(30);
+    queue(device,batch_off,sizeof(batch_off));
+    interleave_output=true;interleave_callbacks=0;
+    IHS_HIDSDLApplyPendingWrites(session);
+    interleave_output=false;
+    for(unsigned tries=0;tries<500 && output_count()<batch_before+2;++tries)pause_ms(1);
+    assert(output_count()==batch_before+2 && interleave_callbacks==2);
+    sl_rumble_trace batch_trace[32];size_t batch_count=sl_rumble_copy_trace(batch_trace,32);
+    uint64_t received_times[2]={0},sent_times[2]={0};
+    for(size_t i=0;i<batch_count;++i) {
+        const sl_rumble_trace *t=&batch_trace[i];
+        if(t->sequence<first_sequence || t->sequence>first_sequence+1)continue;
+        unsigned n=(unsigned)(t->sequence-first_sequence);
+        if(t->kind==1)received_times[n]=t->received_ns;
+        if(t->kind==2)sent_times[n]=t->submitted_ns;
+    }
+    assert(received_times[0] && sent_times[0] && received_times[1] && sent_times[1]);
+    assert(sent_times[1]-sent_times[0]>=received_times[1]-received_times[0]);
+
     /* Independent continuous numerical goldens: source / 65535 times the
      * conservative ~0.5571934 peak, with separated 160/320-Hz bands. */
     const uint8_t ordinary[21] = {1, 0x34, 0x12, 0xcd, 0xab, 0xe8, 0x03};

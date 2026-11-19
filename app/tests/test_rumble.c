@@ -292,5 +292,34 @@ int main(void) {
         sl_rumble_shutdown();
         assert(snapshot().worker_starts==snapshot().worker_joins);
     }
+    /* Slot 1 is selected before slot 0's blocking IPC. Deadline guards must
+     * run at submission too, not just at the earlier selection time. */
+    controllers=2;
+    styles[1]=HidNpadStyleTag_NpadFullKey;
+    for(unsigned overdue=0;overdue<2;++overdue) {
+        atomic_store(&call_number,0);
+        atomic_store(&block_call,1);
+        atomic_store(&blocked_call,0);
+        atomic_store(&stale_nonzero,0);
+        assert(sl_rumble_init());
+        uint64_t received=monotonic_ns();
+        const uint8_t first[9]={1,255,255}, next[9]={1,0,128};
+        uint8_t short_body[9]={1,255,255,0,0,10};
+        if(overdue) short_body[5]=0;
+        assert(sl_rumble_command(0,first,9,received,NULL)==0);
+        await_block(1);
+        assert(sl_rumble_command(0,next,9,received,NULL)==0);
+        assert(sl_rumble_command(1,short_body,9,received,NULL)==0);
+        atomic_store(&block_call,2);
+        await_block(2);
+        assert(atomic_load(&blocked_device)==0);
+        pause_ms(overdue?270:20);
+        atomic_store(&block_call,0);
+        await_sends(3);
+        assert(atomic_load(&stale_nonzero)==0);
+        assert(snapshot().canceled_outputs>=1);
+        assert(snapshot().stream[1].stale_frames==overdue);
+        sl_rumble_shutdown();
+    }
     puts("PASS native output worker, three-sample pulse, expiry, device changes, retry and join");
 }
