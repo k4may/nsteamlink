@@ -528,3 +528,41 @@ POP 的有效 E2E 与至少 30 个新显示帧，保持五秒且末尾一秒仍�
 `update_notice available/modal_open/modal_closed`用于区分版本请求完成与弹窗遮挡，
 不表示它暂停了runtime。三类记录均只在诊断构建，成功会话仍以connection route和
 pipeline进度确认；新版连接/结束路径是否改善需真实复测，不以fixture作验收。
+
+
+## 分层反馈矩阵与来源诊断
+
+`nsl-feedback-probe.nro` 内嵌14条反馈命令，自动覆盖普通批量短震、body/trigger
+独立停止、Sony模拟震动/模式切换与Nintendo原生样本。只需准备hbmenu netloader；
+无需SD夹具或PC安装组件。部署前构建程序与验证器，然后显式指定用户确认的设备IP：
+
+```sh
+cmake --build build/switch --target nsl-feedback-probe_nro
+python3 tools/switch-feedback-probe.py --ip 10.10.10.111 \
+  --nro build/switch/app/nsl-feedback-probe.nro --output build/feedback-device.json
+```
+
+工具仅使用nxlink，不探测28280；保存JSON结果、原始log、命令/文件散列元数据，
+部署期限最多30秒。nxlink退出正常不认证Switch回到hbmenu。
+已有日志可独立复核，不接触网络：
+
+```sh
+python3 tools/check-feedback-matrix.py --log build/feedback-device.log \
+  --output build/feedback-recheck.json
+python3 tools/check-feedback-matrix.py --probe build/desktop/app/nsl-feedback-probe-host
+```
+
+第二条是同一夹具的host-simulation，真实HID/loader为终端替身，所有真机IPC、
+机械及屏幕认证保持false。验证器要求固定刺激、来源、输出、间隔、计数及停止/
+join/归零，拒绝旧Nintendo-only夹具冒充新矩阵。普通/trigger输入可为21B外壳，
+SDK规范化为9B语义命令；matrix不认证被忽略的padding。Nintendo与Sony容器仍
+按完整69B核对。参数读回与机械效果分别报告。
+
+串流客户端的 `haptics` 追加 ordinary_commands/trigger_commands/sony_commands、
+适配/不可还原、替换/丢失/过期/失步、PCM本地帧等计数；
+`pcm_steam_source_ready=false` 表示没有声明Steam专用PCM来源。
+`haptic-trace <serial>` 的 `source` 为0普通、1Nintendo、2trigger、3Sony、
+4到期、5本地归零、6本地专用PCM。kind仍为1命令、2输出、3清理；kind4是
+显式typed PCM本地输入，没有伪造wire。unsupported保留不可还原原因位。
+Sony 47B控制包不是触觉PCM；不能把所有0d都按Nintendo解码。旧归档验证器
+不认识新来源时应拒绝，而不是把它认证为已验证的游戏高级触觉。

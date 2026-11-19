@@ -13,7 +13,7 @@ int __wrap_SDL_GameControllerRumble(SDL_GameController *, Uint16, Uint16, Uint32
 static u32 styles[33];
 static bool connected = true;
 static atomic_uint send_error;
-static atomic_uint call_number, block_call, blocked_call, stale_nonzero;
+static atomic_uint call_number, block_call, blocked_call, blocked_device, stale_nonzero;
 static int controllers = 1;
 static Result init_error;
 static HidNpadIdType destination;
@@ -40,6 +40,7 @@ Result hidInitializeVibrationDevices(HidVibrationDeviceHandle *h, int n, HidNpad
 Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrationValue *v, int n) {
     unsigned call = atomic_fetch_add(&call_number, 1) + 1;
     if (atomic_load(&block_call) == call) {
+        atomic_store(&blocked_device, h[0].type_value);
         atomic_store(&blocked_call, call);
         while (atomic_load(&block_call) == call) {
             struct timespec pause = {.tv_nsec = 1000000};
@@ -63,6 +64,11 @@ Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrat
 static void pause_ms(unsigned ms) {
     struct timespec delay = {.tv_nsec = (long)ms * 1000000};
     nanosleep(&delay, NULL);
+}
+static uint64_t monotonic_ns(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
 }
 static sl_rumble_snapshot snapshot(void) {
     sl_rumble_snapshot s;
@@ -117,9 +123,8 @@ int main(void) {
     pthread_mutex_lock(&capture_lock);
     assert(destination == HidNpadIdType_Handheld && last_count == 2);
     assert(fabsf(last[0].amp_low - .557193398f) < 1e-7f && last[0].amp_high == 0);
-    assert(last[1].amp_low == 0 && fabsf(last[1].amp_high - .278596699f) < 1e-7f);
-    assert(fabsf(last[0].freq_low - 149.933411f) < .0001f);
-    assert(fabsf(last[1].freq_high - 149.933411f) < .0001f);
+    assert(last[1].amp_low == 0 && fabsf(last[1].amp_high - .27860094f) < 1e-7f);
+    assert(last[0].freq_low == 160 && last[1].freq_high == 320);
     pthread_mutex_unlock(&capture_lock);
     await_sends(2);
     pthread_mutex_lock(&capture_lock);
@@ -142,7 +147,7 @@ int main(void) {
     uint8_t pulse[69] = {13, 10, 0, 0, 0, 0x10, 0,
         0, 1, 0x40, 0x40, 0, 0, 5, 0xc0};
     before = snapshot().sends;
-    assert(sl_rumble_command(0, pulse, sizeof(pulse), 0, NULL) == 0);
+    assert(sl_rumble_command(0, pulse, sizeof(pulse), monotonic_ns(), NULL) == 0);
     for (unsigned i = 0; i < 500 && snapshot().stream[0].emitted_samples < 3; ++i)
         pause_ms(1);
     assert(snapshot().stream[0].emitted_samples == 3);
@@ -207,19 +212,52 @@ int main(void) {
     atomic_store(&call_number, 0);
     atomic_store(&block_call, 1);
     atomic_store(&blocked_call, 0);
+    atomic_store(&blocked_device, 0);
     atomic_store(&stale_nonzero, 0);
     assert(sl_rumble_init());
-    assert(rumble(65535, 0, 0) == 0);
+    const uint8_t first_body[9] = {1, 255, 255};
+    const uint8_t second_body[9] = {1, 0, 128};
+    const uint64_t batch_received = monotonic_ns();
+    assert(sl_rumble_command(0, first_body, sizeof(first_body), batch_received, NULL) == 0);
     await_block(1);
-    assert(rumble(32768, 0, 0) == 0);
+    /* The concurrent source events share a receive instant. Otherwise source
+     * gap preservation may legitimately select slot 1 before slot 0's next
+     * event, invalidating this selected-but-unsubmitted cancellation fixture. */
+    assert(sl_rumble_command(0, second_body, sizeof(second_body), batch_received, NULL) == 0);
     const uint8_t ordinary[9] = {1, 255, 255};
-    assert(sl_rumble_command(1, ordinary, sizeof(ordinary), 0, NULL) == 0);
+    assert(sl_rumble_command(1, ordinary, sizeof(ordinary), batch_received, NULL) == 0);
     atomic_store(&block_call, 2);
     await_block(2);
+    assert(atomic_load(&blocked_device) == 0); /* slot 0, not slot 1's own IPC */
     sl_rumble_tick(false);
     atomic_store(&block_call, 0);
     sl_rumble_shutdown();
     assert(atomic_load(&stale_nonzero) == 0);
     assert(snapshot().canceled_outputs == 1);
+    /* The dedicated local PCM frontend reaches the same worker/IPC sink,
+     * preserves authored left/right, and refuses a one-actuator topology. */
+    controllers = 1;
+    assert(sl_rumble_init());
+    sl_pcm_frame pcm = {.epoch = 1, .flags = SL_PCM_FRAME_RESET,
+        .values = {{0,160,0,320},{0,160,0,320}}};
+    assert(sl_rumble_pcm_frame(0, &pcm, monotonic_ns()) == 0);
+    await_sends(1);
+    pcm.flags = 0; pcm.available_pts_ns += 5000000;
+    pcm.values[0] = (sl_hd_value){.2f,123,0,320};
+    pcm.values[1] = (sl_hd_value){0,160,.1f,500};
+    assert(sl_rumble_pcm_frame(0, &pcm, monotonic_ns()) == 0);
+    await_sends(2);
+    pthread_mutex_lock(&capture_lock);
+    assert(last_count == 2 && last[0].amp_low == .2f && last[0].freq_low == 123);
+    assert(last[1].amp_high == .1f && last[1].freq_high == 500 && !last[1].amp_low);
+    pthread_mutex_unlock(&capture_lock);
+    pcm.flags = SL_PCM_FRAME_EOS; pcm.available_pts_ns += 5000000;
+    pcm.values[0] = pcm.values[1] = (sl_hd_value){0,160,0,320};
+    assert(sl_rumble_pcm_frame(0, &pcm, monotonic_ns()) == 0);
+    await_sends(3);
+    styles[0] = HidNpadStyleTag_NpadJoyRight;
+    assert(sl_rumble_pcm_frame(0, &pcm, monotonic_ns()) == -1);
+    assert(snapshot().stream[0].unsupported_effects == 1);
+    sl_rumble_shutdown();
     puts("PASS native output worker, three-sample pulse, expiry, device changes, retry and join");
 }

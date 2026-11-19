@@ -62,7 +62,8 @@ static int index_of(SDL_JoystickID id, void *p) { (void)p; return id == joystick
 static SDL_JoystickID id_at(int i, void *p) { (void)i; (void)p; return joystick_id; }
 static SDL_GameController *controller_at(int i, void *p) { (void)p; return i == 0 ? controller : NULL; }
 static const IHS_HIDProviderSDLDeviceList list = {.count = count, .index = index_of,
-    .instanceId = id_at, .controller = controller_at, .output = sl_rumble_command};
+    .instanceId = id_at, .controller = controller_at, .output = sl_rumble_command,
+    .outputDiscontinuity = sl_rumble_discontinuity};
 
 static void observe(HidVibrationDeviceHandle handles[2], unsigned devices, uint64_t duration_ns) {
     uint64_t until = now_ns() + duration_ns;
@@ -79,6 +80,9 @@ static void observe(HidVibrationDeviceHandle handles[2], unsigned devices, uint6
         nanosleep(&delay, NULL);
     }
 }
+#ifdef NSL_FEEDBACK_MATRIX
+#include "feedback_matrix.h"
+#endif
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -96,7 +100,13 @@ int main(int argc, char **argv) {
     }
     struct timeval timeout = {.tv_usec = 100000};
     setsockopt(log_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#ifdef NSL_FEEDBACK_MATRIX
 #ifdef NSL_HAPTICS_PROBE_HOST
+    log_line("{\"stage\":\"begin\",\"platform\":\"host-simulation\",\"matrix\":true,\"physical_fidelity_verified\":false}");
+#else
+    log_line("{\"stage\":\"begin\",\"platform\":\"switch\",\"matrix\":true,\"physical_fidelity_verified\":false}");
+#endif
+#elif defined(NSL_HAPTICS_PROBE_HOST)
     log_line("{\"stage\":\"begin\",\"platform\":\"host-simulation\",\"physical_fidelity_verified\":false}");
 #else
     log_line("{\"stage\":\"begin\",\"platform\":\"switch\",\"physical_fidelity_verified\":false}");
@@ -139,6 +149,9 @@ int main(int argc, char **argv) {
     IHS_HIDManagedDevice *device = IHS_HIDManagerOpenDevice(session->hidManager, path);
     if (!device)
         goto cleanup;
+#ifdef NSL_FEEDBACK_MATRIX
+    ok = run_feedback_matrix(device, session, handles, devices);
+#else
     ok = true;
     for (unsigned side = 0; side < 2; ++side) {
         for (unsigned repeat = 0; repeat < 6; ++repeat) {
@@ -168,6 +181,8 @@ int main(int argc, char **argv) {
     IHS_HIDSDLApplyPendingWrites(session);
     observe(handles, devices, 15000000);
 
+#endif
+
 cleanup:
     sl_rumble_tick(false);
     sl_rumble_shutdown();
@@ -185,7 +200,7 @@ cleanup:
     IHS_HIDSDLOutputStats output = {0};
     if (session)
         IHS_HIDSDLGetOutputStats(session, &output);
-    log_line("{\"stage\":\"joined\",\"running\":%s,\"starts\":%llu,\"joins\":%llu,\"sends\":%llu,\"failures\":%llu,\"io_rc\":%u,\"queued\":%llu,\"applied\":%llu,\"rejected\":%llu,\"dropped\":%llu,\"trace_lost\":%llu,\"decoded\":%llu,\"scheduled\":%llu,\"emitted\":%llu,\"stream_rejected\":%llu,\"stream_dropped\":%llu}",
+    log_line("{\"stage\":\"joined\",\"running\":%s,\"starts\":%llu,\"joins\":%llu,\"sends\":%llu,\"failures\":%llu,\"io_rc\":%u,\"queued\":%llu,\"applied\":%llu,\"rejected\":%llu,\"dropped\":%llu,\"trace_lost\":%llu,\"decoded\":%llu,\"scheduled\":%llu,\"emitted\":%llu,\"stream_rejected\":%llu,\"stream_dropped\":%llu,\"ordinary_commands\":%llu,\"trigger_commands\":%llu,\"sony_commands\":%llu,\"unsupported_effects\":%llu,\"adapted_effects\":%llu,\"stale_frames\":%llu,\"discontinuities\":%llu,\"desync_rejected\":%llu,\"superseded_samples\":%llu,\"dropped_frames\":%llu}",
         snapshot.worker_running ? "true" : "false", (unsigned long long)snapshot.worker_starts,
         (unsigned long long)snapshot.worker_joins, (unsigned long long)snapshot.sends,
         (unsigned long long)snapshot.send_failures, snapshot.io_result,
@@ -196,7 +211,17 @@ cleanup:
         (unsigned long long)snapshot.stream[0].scheduled_samples,
         (unsigned long long)snapshot.stream[0].emitted_samples,
         (unsigned long long)snapshot.stream[0].rejected,
-        (unsigned long long)snapshot.stream[0].dropped_samples);
+        (unsigned long long)snapshot.stream[0].dropped_samples,
+        (unsigned long long)snapshot.stream[0].ordinary_commands,
+        (unsigned long long)snapshot.stream[0].trigger_commands,
+        (unsigned long long)snapshot.stream[0].sony_commands,
+        (unsigned long long)snapshot.stream[0].unsupported_effects,
+        (unsigned long long)snapshot.stream[0].adapted_effects,
+        (unsigned long long)snapshot.stream[0].stale_frames,
+        (unsigned long long)snapshot.stream[0].discontinuities,
+        (unsigned long long)snapshot.stream[0].desync_rejected,
+        (unsigned long long)snapshot.stream[0].superseded_samples,
+        (unsigned long long)snapshot.stream[0].dropped_frames);
     for (size_t i = 0; i < n; ++i) {
         sl_rumble_trace *t = &trace[i];
         if (t->kind == 1) {
@@ -204,14 +229,14 @@ cleanup:
             for (unsigned j = 0; j < t->size; ++j)
                 snprintf(bytes + j * 2, 3, "%02x", t->command[j]);
             bytes[t->size * 2] = 0;
-            log_line("{\"stage\":\"command\",\"slot\":%u,\"seq\":%llu,\"received_ns\":%llu,\"apply_ns\":%llu,\"rc\":%u,\"wire\":\"%s\"}",
+            log_line("{\"stage\":\"command\",\"slot\":%u,\"seq\":%llu,\"received_ns\":%llu,\"apply_ns\":%llu,\"source\":%u,\"unsupported\":%u,\"rc\":%u,\"wire\":\"%s\"}",
                 t->slot, (unsigned long long)t->sequence, (unsigned long long)t->received_ns,
-                (unsigned long long)t->submitted_ns, t->result, bytes);
+                (unsigned long long)t->submitted_ns, t->source, t->unsupported, t->result, bytes);
         } else {
-            log_line("{\"stage\":\"send\",\"kind\":%u,\"slot\":%u,\"seq\":%llu,\"sample\":%u,\"due_ns\":%llu,\"sent_ns\":%llu,\"completed_ns\":%llu,\"rc\":%u,\"values\":[[%.9g,%.9g,%.9g,%.9g],[%.9g,%.9g,%.9g,%.9g]]}",
+            log_line("{\"stage\":\"send\",\"kind\":%u,\"slot\":%u,\"seq\":%llu,\"sample\":%u,\"due_ns\":%llu,\"sent_ns\":%llu,\"completed_ns\":%llu,\"source\":%u,\"unsupported\":%u,\"rc\":%u,\"values\":[[%.9g,%.9g,%.9g,%.9g],[%.9g,%.9g,%.9g,%.9g]]}",
                 t->kind, t->slot, (unsigned long long)t->sequence, t->sample,
                 (unsigned long long)t->due_ns, (unsigned long long)t->submitted_ns,
-                (unsigned long long)t->completed_ns, t->result,
+                (unsigned long long)t->completed_ns, t->source, t->unsupported, t->result,
                 t->values[0].amp_low, t->values[0].freq_low, t->values[0].amp_high, t->values[0].freq_high,
                 t->values[1].amp_low, t->values[1].freq_low, t->values[1].amp_high, t->values[1].freq_high);
         }

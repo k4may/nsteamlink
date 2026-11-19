@@ -17,7 +17,8 @@ typedef struct sl_rumble_snapshot {
 typedef struct sl_rumble_trace {
     uint64_t serial, received_ns, due_ns, submitted_ns, completed_ns, sequence;
     uint32_t result;
-    unsigned slot, sample, kind, size, count;
+    unsigned slot, sample, kind, size, count, source;
+    uint32_t unsupported;
     uint8_t command[69];
     sl_hd_value values[2];
 } sl_rumble_trace;
@@ -29,6 +30,12 @@ bool sl_rumble_init(void);
 void sl_rumble_shutdown(void);
 int sl_rumble_command(int32_t joystick_id, const uint8_t *command, size_t size,
                       uint64_t received_ns, void *context);
+void sl_rumble_discontinuity(int32_t joystick_id, void *context);
+/* Owner-thread submission of already analyzed dedicated PCM. source_ns is
+ * explicitly mapped local available-time; this is not a Remote Play packet.
+ * Dedicated left/right PCM requires two actuators; single Joy-Con is rejected
+ * and counted, rather than silently losing the other authored channel. */
+int sl_rumble_pcm_frame(int32_t joystick_id, const sl_pcm_frame *frame, uint64_t source_ns);
 void sl_rumble_tick(bool session_active);
 /* Owner refreshes hardware/style availability; query only reads a locked
  * snapshot and is safe on the SDK enumeration thread. No motor ACK implied. */

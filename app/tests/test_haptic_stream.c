@@ -55,7 +55,7 @@ int main(void) {
     for (unsigned i = 0; i < 4; ++i)
         absolute[7 + i] = absolute[11 + i] = (uint8_t)(word >> (i * 8));
     assert(!sl_haptic_command(&s, absolute, 69, start, start, false));
-    assert(s.stats.overflows == 1 && s.stats.dropped_samples == 1);
+    assert(s.stats.overflows == 1 && s.stats.dropped_samples == SL_HAPTIC_QUEUE + 1);
     sl_hd_value held;
     sl_hd_current(&s.decoder[0], &held);
     assert(held.amp_low > .25f && held.freq_low == 80 && held.freq_high == 640);
@@ -71,7 +71,7 @@ int main(void) {
 
     /* An explicit ordinary stop/replace discards all queued native frames. */
     assert(sl_haptic_command(&s, ordinary, 9, start, start, true));
-    assert(s.count == 0 && sl_haptic_advance(&s, start, &f));
+    assert(s.count == 1 && sl_haptic_advance(&s, start, &f));
     assert(fabsf(f.values[0].amp_low - .557193398f) < 1e-7f && f.values[1].amp_low == 0);
     assert(!sl_haptic_advance(&s, start + 9999999, &f));
     assert(sl_haptic_advance(&s, start + 10000000, &f));

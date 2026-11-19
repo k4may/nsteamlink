@@ -112,6 +112,7 @@ static Result emit(native_io *io, const output *o) {
             s->stream.current.sequence == o->frame.sequence &&
             s->stream.current.sample == o->frame.sample &&
             s->stream.current.native == o->frame.native &&
+            s->stream.current.source == o->frame.source &&
             s->stream.current.due_ns == o->frame.due_ns;
         if (!current)
             ++stats.canceled_outputs;
@@ -139,7 +140,8 @@ static Result emit(native_io *io, const output *o) {
     sl_rumble_trace t = {.kind = o->stop ? 3 : 2, .slot = o->slot,
         .received_ns = o->frame.received_ns, .due_ns = o->frame.due_ns,
         .submitted_ns = submitted, .completed_ns = completed, .sequence = o->frame.sequence,
-        .sample = o->frame.sample, .result = rc, .count = o->target.count};
+        .sample = o->frame.sample, .result = rc, .count = o->target.count,
+        .source = o->frame.source};
     memcpy(t.values, values, sizeof(t.values));
     record(&t);
     pthread_mutex_unlock(&lock);
@@ -321,6 +323,9 @@ static void record_command(unsigned index, const uint8_t *command, size_t size,
         .size = size <= 69 ? (unsigned)size : 0, .result = result};
     if (command && t.size)
         memcpy(t.command, command, t.size);
+    t.source = size && command[0] == 6 ? SL_HAPTIC_TRIGGERS :
+        size && command[0] == 13 ? (size > 1 && command[1] == 47 ? SL_HAPTIC_SONY : SL_HAPTIC_NINTENDO) : SL_HAPTIC_BODY;
+    t.unsupported = slots[index].stream.last_unsupported;
     record(&t);
 }
 static int reject_command(unsigned index, const uint8_t *command, size_t size,
@@ -330,6 +335,26 @@ static int reject_command(unsigned index, const uint8_t *command, size_t size,
     record_command(index, command, size, received, now_ns(), result);
     pthread_mutex_unlock(&lock);
     return SDL_SetError("%s: %08x", message, (unsigned)result);
+}
+static int prepare_target(int32_t index, binding *out, u32 *out_style, Result *failure) {
+    *failure = UINT32_MAX;
+    HidNpadIdType id;
+    u32 style = location(index, &id);
+    unsigned count = actuator_count(style);
+    if (!count) return SDL_SetError("No native vibration actuator");
+    pthread_mutex_lock(&lock);
+    binding target = slots[index].target;
+    pthread_mutex_unlock(&lock);
+    if (!target.count || target.id != id || target.style != style) {
+        target = (binding){.id = id, .style = style, .count = count,
+                           .generation = target.generation + 1};
+        Result rc = hidInitializeVibrationDevices(target.handles, (int)count, id, (HidNpadStyleTag)style);
+        if (R_FAILED(rc)) {
+            *failure = rc;
+            return SDL_SetError("Switch vibration activation failed: %08x", (unsigned)rc);
+        }
+    }
+    *out = target; *out_style = style; return 0;
 }
 int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
                       uint64_t received, void *unused) {
@@ -341,24 +366,12 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
     if (!sl_haptic_valid_command(command, size))
         return reject_command((unsigned)index, command, size, received, UINT32_MAX,
                               "Invalid Switch vibration command");
-    HidNpadIdType id;
-    u32 style = location(index, &id);
-    unsigned count = actuator_count(style);
-    if (!count)
-        return reject_command((unsigned)index, command, size, received, UINT32_MAX,
-                              "No native vibration actuator");
-    pthread_mutex_lock(&lock);
-    binding target = slots[index].target;
-    pthread_mutex_unlock(&lock);
-    if (!target.count || target.id != id || target.style != style) {
-        target = (binding){.id = id, .style = style, .count = count,
-                           .generation = target.generation + 1};
-        Result rc = hidInitializeVibrationDevices(target.handles, (int)count, id,
-                                                   (HidNpadStyleTag)style);
-        if (R_FAILED(rc))
-            return reject_command((unsigned)index, command, size, received, rc,
-                                  "Switch vibration activation failed");
-    }
+    binding target;
+    u32 style;
+    Result target_result;
+    if (prepare_target(index, &target, &style, &target_result) < 0)
+        return reject_command((unsigned)index, command, size, received, target_result,
+                              "Switch vibration target unavailable");
     uint64_t now = now_ns();
     pthread_mutex_lock(&lock);
     slot *s = &slots[index];
@@ -370,12 +383,55 @@ int sl_rumble_command(int32_t index, const uint8_t *command, size_t size,
         s->stream.dirty = false;
         s->target = target;
     }
-    bool ok = sl_haptic_command(&s->stream, command, size, received, now,
-        (style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual)) != 0);
+    sl_rumble_layout layout = style & (HidNpadStyleTag_NpadHandheld | HidNpadStyleTag_NpadJoyDual) ?
+        SL_RUMBLE_LAYOUT_PAIRED : style & HidNpadStyleTag_NpadJoyLeft ? SL_RUMBLE_LAYOUT_SINGLE_LEFT :
+        style & HidNpadStyleTag_NpadJoyRight ? SL_RUMBLE_LAYOUT_SINGLE_RIGHT : SL_RUMBLE_LAYOUT_PRO;
+    bool ok = sl_haptic_command_layout(&s->stream, command, size, received, now, layout);
     record_command((unsigned)index, command, size, received, now, ok ? 0 : UINT32_MAX);
     pthread_cond_signal(&wake);
     pthread_mutex_unlock(&lock);
     return ok ? 0 : SDL_SetError("Invalid or overflowing Switch vibration command");
+}
+int sl_rumble_pcm_frame(int32_t index, const sl_pcm_frame *frame, uint64_t source_ns) {
+    if (index < 0 || index >= 8 || !SDL_JoystickFromInstanceID(index) ||
+        !initialized || !available || !frame) return SDL_SetError("PCM vibration target unavailable");
+    binding target;
+    u32 style;
+    Result target_result;
+    if (prepare_target(index, &target, &style, &target_result) < 0) return -1;
+    (void)style;
+    if (target.count != 2) {
+        pthread_mutex_lock(&lock);
+        ++slots[index].stream.stats.unsupported_effects;
+        pthread_mutex_unlock(&lock);
+        return SDL_SetError("Dedicated stereo haptics requires two vibration actuators");
+    }
+    uint64_t now = now_ns();
+    pthread_mutex_lock(&lock);
+    slot *s = &slots[index];
+    if (s->target.generation != target.generation) {
+        sl_haptic_stop(&s->stream, now);
+        s->stream.dirty = false;
+        s->target = target;
+    }
+    bool ok = sl_haptic_pcm_frame(&s->stream, frame, source_ns, now);
+    /* A typed local event is explicitly different from a DeviceWrite packet.
+     * Never forge wire bytes or advertise it as a Steam PCM source. */
+    sl_rumble_trace t = {.kind = 4, .slot = (unsigned)index, .source = SL_HAPTIC_PCM,
+        .received_ns = source_ns, .submitted_ns = now, .sequence = s->stream.stats.commands,
+        .result = ok ? 0 : UINT32_MAX, .count = target.count};
+    memcpy(t.values, frame->values, sizeof(t.values)); record(&t);
+    pthread_cond_signal(&wake);
+    pthread_mutex_unlock(&lock);
+    return ok ? 0 : SDL_SetError("Invalid or overflowing local PCM vibration frame");
+}
+void sl_rumble_discontinuity(int32_t index, void *unused) {
+    (void)unused;
+    if (!initialized || index < 0 || index >= 8) return;
+    pthread_mutex_lock(&lock);
+    sl_haptic_discontinuity(&slots[index].stream, now_ns());
+    pthread_cond_signal(&wake);
+    pthread_mutex_unlock(&lock);
 }
 int __wrap_SDL_GameControllerRumble(SDL_GameController *controller, Uint16 low, Uint16 high,
                                     Uint32 duration_ms) {

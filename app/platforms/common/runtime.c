@@ -2499,6 +2499,19 @@ static void udp_poll(sl_runtime *r) {
             total.overflows += s.stream[i].overflows;
             total.dropped_samples += s.stream[i].dropped_samples;
             total.late_samples += s.stream[i].late_samples;
+            total.ordinary_commands += s.stream[i].ordinary_commands;
+            total.trigger_commands += s.stream[i].trigger_commands;
+            total.sony_commands += s.stream[i].sony_commands;
+            total.superseded_samples += s.stream[i].superseded_samples;
+            total.stale_frames += s.stream[i].stale_frames;
+            total.discontinuities += s.stream[i].discontinuities;
+            total.desync_rejected += s.stream[i].desync_rejected;
+            total.unsupported_effects += s.stream[i].unsupported_effects;
+            total.adapted_effects += s.stream[i].adapted_effects;
+            total.scheduled_frames += s.stream[i].scheduled_frames;
+            total.emitted_frames += s.stream[i].emitted_frames;
+            total.dropped_frames += s.stream[i].dropped_frames;
+            total.pcm_frames += s.stream[i].pcm_frames;
             if (s.stream[i].max_lateness_ns > total.max_lateness_ns)
                 total.max_lateness_ns = s.stream[i].max_lateness_ns;
         }
@@ -2513,7 +2526,19 @@ static void udp_poll(sl_runtime *r) {
             "\"stop_failures\":%llu,\"canceled_outputs\":%llu,\"trace_overwritten\":%llu,\"io_rc\":%u,"
             "\"native_capability_mask\":%u,"
             "\"source_queued\":%llu,\"source_applied\":%llu,\"source_rejected\":%llu,"
-            "\"source_dropped\":%llu,\"source_pending_bytes\":%llu}",
+            "\"source_dropped\":%llu,\"source_pending_bytes\":%llu,"
+            "\"ordinary_commands\":%llu,"
+            "\"trigger_commands\":%llu,"
+            "\"sony_commands\":%llu,"
+            "\"superseded_samples\":%llu,"
+            "\"stale_frames\":%llu,"
+            "\"discontinuities\":%llu,"
+            "\"desync_rejected\":%llu,"
+            "\"unsupported_effects\":%llu,"
+            "\"adapted_effects\":%llu,"
+            "\"scheduled_frames\":%llu,"
+            "\"emitted_frames\":%llu,"
+            "\"dropped_frames\":%llu,\"pcm_frames\":%llu,\"pcm_steam_source_ready\":false}",
             (unsigned long long)total.commands, (unsigned long long)total.native_commands,
             (unsigned long long)total.decoded_samples, (unsigned long long)total.scheduled_samples,
             (unsigned long long)total.emitted_samples,
@@ -2525,7 +2550,20 @@ static void udp_poll(sl_runtime *r) {
             s.native_capability_mask,
             (unsigned long long)q.queued, (unsigned long long)q.applied,
             (unsigned long long)q.rejected, (unsigned long long)q.queueDropped,
-            (unsigned long long)q.pendingBytes);
+            (unsigned long long)q.pendingBytes,
+            (unsigned long long)total.ordinary_commands,
+            (unsigned long long)total.trigger_commands,
+            (unsigned long long)total.sony_commands,
+            (unsigned long long)total.superseded_samples,
+            (unsigned long long)total.stale_frames,
+            (unsigned long long)total.discontinuities,
+            (unsigned long long)total.desync_rejected,
+            (unsigned long long)total.unsupported_effects,
+            (unsigned long long)total.adapted_effects,
+            (unsigned long long)total.scheduled_frames,
+            (unsigned long long)total.emitted_frames,
+            (unsigned long long)total.dropped_frames,
+            (unsigned long long)total.pcm_frames);
     } else if (!strncmp(cmd, "haptic-trace ", 13)) {
         char *end;
         uint64_t after = strtoull(cmd + 13, &end, 10);
@@ -2542,12 +2580,12 @@ static void udp_poll(sl_runtime *r) {
                 int n = snprintf(reply + used, sizeof(reply) - used,
                     "{\"serial\":%llu,\"kind\":%u,\"slot\":%u,\"seq\":%llu,\"sample\":%u,"
                     "\"received_ns\":%llu,\"due_ns\":%llu,\"sent_ns\":%llu,\"completed_ns\":%llu,"
-                    "\"rc\":%u,\"wire\":\"%s\",\"values\":[[%.9g,%.9g,%.9g,%.9g],[%.9g,%.9g,%.9g,%.9g]]}\n",
+                    "\"source\":%u,\"unsupported\":%u,\"rc\":%u,\"wire\":\"%s\",\"values\":[[%.9g,%.9g,%.9g,%.9g],[%.9g,%.9g,%.9g,%.9g]]}\n",
                     (unsigned long long)t->serial, t->kind, t->slot,
                     (unsigned long long)t->sequence, t->sample,
                     (unsigned long long)t->received_ns, (unsigned long long)t->due_ns,
                     (unsigned long long)t->submitted_ns, (unsigned long long)t->completed_ns,
-                    t->result, wire, t->values[0].amp_low, t->values[0].freq_low,
+                    t->source, t->unsupported, t->result, wire, t->values[0].amp_low, t->values[0].freq_low,
                     t->values[0].amp_high, t->values[0].freq_high,
                     t->values[1].amp_low, t->values[1].freq_low,
                     t->values[1].amp_high, t->values[1].freq_high);

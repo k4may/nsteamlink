@@ -20,8 +20,10 @@ static SDL_GameController *controller;
 static SDL_JoystickID instance;
 static unsigned activations;
 static pthread_mutex_t hid_lock = PTHREAD_MUTEX_INITIALIZER;
-static HidVibrationValue hid_outputs[16][2];
+#define HID_OUTPUT_CAPACITY 128u
+static HidVibrationValue hid_outputs[HID_OUTPUT_CAPACITY][2];
 static unsigned hid_output_count;
+static unsigned queued_commands;
 static int device_count(void *p) { (void)p; return 1; }
 static int device_index(SDL_JoystickID id, void *p) { (void)p; return id == instance ? 0 : -1; }
 static SDL_JoystickID device_id(int i, void *p) { (void)i; (void)p; return instance; }
@@ -39,10 +41,52 @@ Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrat
     (void)h;
     assert(!pthread_equal(owner, pthread_self()) && n == 2);
     pthread_mutex_lock(&hid_lock);
-    assert(hid_output_count < 16);
+    assert(hid_output_count < HID_OUTPUT_CAPACITY);
     memcpy(hid_outputs[hid_output_count++], v, sizeof(hid_outputs[0]));
     pthread_mutex_unlock(&hid_lock);
     return 0;
+}
+static void pause_ms(unsigned ms) {
+    struct timespec pause = {.tv_nsec = (long)ms * 1000000};
+    nanosleep(&pause, NULL);
+}
+static unsigned output_count(void) {
+    pthread_mutex_lock(&hid_lock);
+    unsigned result = hid_output_count;
+    pthread_mutex_unlock(&hid_lock);
+    return result;
+}
+static void await_output(unsigned before) {
+    for (unsigned tries = 0; tries < 500; ++tries) {
+        if (output_count() > before) return;
+        pause_ms(1);
+    }
+    assert(!"worker did not submit the queued effect");
+}
+static void assert_output(unsigned index, float left_low, float left_high,
+                           float right_low, float right_high) {
+    pthread_mutex_lock(&hid_lock);
+    assert(index < hid_output_count);
+    const float amplitudes[2][2] = {{left_low, left_high}, {right_low, right_high}};
+    for (unsigned i = 0; i < 2; ++i) {
+        HidVibrationValue v = hid_outputs[index][i];
+        assert(fabsf(v.amp_low - amplitudes[i][0]) < 1e-7f);
+        assert(fabsf(v.amp_high - amplitudes[i][1]) < 1e-7f);
+        assert(v.freq_low == 160 && v.freq_high == 320);
+    }
+    pthread_mutex_unlock(&hid_lock);
+}
+static void queue(IHS_HIDManagedDevice *device, const uint8_t *data, size_t size) {
+    assert(IHS_HIDDeviceWrite(device->device, data, size) == 0);
+    ++queued_commands;
+}
+static unsigned apply(IHS_Session *session, IHS_HIDManagedDevice *device,
+                       const uint8_t *data, size_t size) {
+    unsigned before = output_count();
+    queue(device, data, size);
+    IHS_HIDSDLApplyPendingWrites(session);
+    await_output(before);
+    return before;
 }
 int main(void) {
     owner = pthread_self();
@@ -63,6 +107,7 @@ int main(void) {
     assert(session);
     IHS_HIDProviderSDLDeviceList list = {.count = device_count, .index = device_index,
         .instanceId = device_id, .controller = device_controller, .output = sl_rumble_command,
+        .outputDiscontinuity = sl_rumble_discontinuity,
         .supportsNativeHaptics = sl_rumble_supports_native_haptics};
     IHS_HIDProvider *provider = IHS_HIDProviderSDLCreateUnmanaged(&list, NULL);
     assert(provider);
@@ -78,7 +123,7 @@ int main(void) {
         0, 1, 0x40, 0x40, 0, 0, 5, 0xc0};
     uint8_t wire[69];
     memcpy(wire, original, sizeof(wire));
-    assert(IHS_HIDDeviceWrite(device->device, wire, sizeof(wire)) == 0);
+    queue(device, wire, sizeof(wire));
     memset(wire, 0xaa, sizeof(wire));
     assert(activations == 0); /* Network receive cannot touch SDL/HID. */
     IHS_HIDSDLApplyPendingWrites(session);
@@ -116,49 +161,127 @@ int main(void) {
         previous = trace[i].completed_ns;
         ++samples;
     }
-    /* The original 21-byte ordinary envelope must reach the same native HID
-     * terminal with fixed-SDL golden amplitudes/frequencies, then stop. */
-    pthread_mutex_lock(&hid_lock);
-    unsigned before = hid_output_count;
-    pthread_mutex_unlock(&hid_lock);
+    /* Independent continuous numerical goldens: source / 65535 times the
+     * conservative ~0.5571934 peak, with separated 160/320-Hz bands. */
     const uint8_t ordinary[21] = {1, 0x34, 0x12, 0xcd, 0xab, 0xe8, 0x03};
     const uint8_t stop[21] = {1};
-    for (unsigned step = 0; step < 2; ++step) {
-        assert(IHS_HIDDeviceWrite(device->device, step ? stop : ordinary, 21) == 0);
-        IHS_HIDSDLApplyPendingWrites(session);
-        bool delivered = false;
-        for (unsigned tries = 0; tries < 500; ++tries) {
-            pthread_mutex_lock(&hid_lock);
-            delivered = hid_output_count > before + step;
-            pthread_mutex_unlock(&hid_lock);
-            if (delivered) break;
-            struct timespec pause = {.tv_nsec = 1000000};
-            nanosleep(&pause, NULL);
-        }
-        assert(delivered);
-        pthread_mutex_lock(&hid_lock);
-        for (unsigned motor = 0; motor < 2; ++motor) {
-            HidVibrationValue v = hid_outputs[before + step][motor];
-            assert(fabsf(v.amp_low - (step ? 0 : .0441941731f)) < 1e-7f);
-            assert(fabsf(v.amp_high - (step ? 0 : .377291113f)) < 1e-7f);
-            assert(fabsf(v.freq_low - (step ? 160 : 149.933411f)) < .0001f);
-            assert(fabsf(v.freq_high - (step ? 320 : 149.933411f)) < .0001f);
-        }
-        pthread_mutex_unlock(&hid_lock);
+    unsigned before = apply(session, device, ordinary, sizeof(ordinary));
+    assert_output(before, .039620375f, .373936415f, .039620375f, .373936415f);
+    before = apply(session, device, stop, sizeof(stop));
+    assert_output(before, 0, 0, 0, 0);
+
+    /* Generic trigger rumble reaches the callback independently of body
+     * rumble. Stopping either source leaves the other source running. */
+    const uint8_t body[21] = {1, 255, 255};
+    const uint8_t trigger_right[21] = {6, 0, 0, 255, 255};
+    const uint8_t trigger_left[21] = {6, 255, 255};
+    const uint8_t trigger_stop[21] = {6};
+    before = apply(session, device, body, sizeof(body));
+    assert_output(before, .5571934f, 0, .5571934f, 0);
+    before = apply(session, device, trigger_right, sizeof(trigger_right));
+    assert_output(before, .5571934f, 0, .5571934f, .5571934f);
+    before = apply(session, device, trigger_stop, sizeof(trigger_stop));
+    assert_output(before, .5571934f, 0, .5571934f, 0);
+    before = apply(session, device, trigger_left, sizeof(trigger_left));
+    assert_output(before, .5571934f, .5571934f, .5571934f, 0);
+    before = apply(session, device, stop, sizeof(stop));
+    assert_output(before, 0, .5571934f, 0, 0);
+    before = apply(session, device, trigger_stop, sizeof(trigger_stop));
+    assert_output(before, 0, 0, 0, 0);
+
+    /* Sony's actual 47-byte state is framed by the existing SDK envelope.
+     * These motor fields are ordinary emulated rumble, not authored PCM. */
+    uint8_t sony[69] = {13, 47, 0, 0, 0};
+    sony[5] = 0x03; /* legacy emulated-rumble enable + haptics select */
+    sony[7] = 64;  /* right motor */
+    sony[8] = 128; /* left motor */
+    before = apply(session, device, sony, sizeof(sony));
+    assert_output(before, .279689252f, .139844626f, .279689252f, .139844626f);
+    uint8_t partial[69];
+    memcpy(partial, sony, sizeof(partial));
+    /* SDL adds the active rumble mode and cached motor bytes to its full
+     * state even when updating a light. Do not invent persistent mode bits. */
+    partial[6] = 0x04; /* additional valid light-control field */
+    before = apply(session, device, partial, sizeof(partial));
+    assert_output(before, .279689252f, .139844626f, .279689252f, .139844626f);
+
+    memcpy(partial, sony, sizeof(partial));
+    partial[5] |= 0x04; /* additional right adaptive-trigger field */
+    partial[15] = 0x26; /* vibration-mode trigger: unsupported body conversion */
+    before = apply(session, device, partial, sizeof(partial));
+    assert_output(before, .279689252f, .139844626f, .279689252f, .139844626f);
+
+    /* A report without emulated-rumble selection returns to audio mode.
+     * There are no PCM samples in it, so continuing the old body is wrong. */
+    memset(partial, 0, sizeof(partial));
+    partial[0] = 13;
+    partial[1] = 47;
+    partial[6] = 0x04;
+    partial[8] = 255; /* not a motor update in audio mode */
+    before = apply(session, device, partial, sizeof(partial));
+    assert_output(before, 0, 0, 0, 0);
+    before = apply(session, device, sony, sizeof(sony));
+    assert_output(before, .279689252f, .139844626f, .279689252f, .139844626f);
+
+    /* Invalid Sony routing shuts down that body effect instead of playing
+     * arbitrary motor bytes. Other packet categories are never motor data. */
+    sony[5] = 0x01; /* missing haptics select */
+    before = apply(session, device, sony, sizeof(sony));
+    assert_output(before, 0, 0, 0, 0);
+    sony[5] = 0x03;
+    before = apply(session, device, sony, sizeof(sony));
+    assert_output(before, .279689252f, .139844626f, .279689252f, .139844626f);
+
+    /* Overflow the SDK queue with harmless report-version control writes.
+     * Its discontinuity callback must stop an already active body effect.
+     * No empty TCP/real-device/network fixture is involved. */
+    const uint8_t version[2] = {9, 3};
+    unsigned accepted = 0;
+    while (IHS_HIDDeviceWrite(device->device, version, sizeof(version)) == 0) {
+        ++queued_commands;
+        assert(++accepted < 2000);
     }
-    sl_rumble_shutdown();
+    assert(accepted > 0);
+    /* Even a smaller write is rejected until the lost-order boundary drains. */
+    assert(IHS_HIDDeviceWrite(device->device, version, sizeof(version)) == -1);
+    before = output_count();
+    IHS_HIDSDLApplyPendingWrites(session);
+    await_output(before);
+    assert_output(before, 0, 0, 0, 0);
     sl_rumble_snapshot snapshot;
+    sl_rumble_get_snapshot(&snapshot);
+    assert(snapshot.stream[0].discontinuities == 1);
+
+    /* A relative Nintendo report cannot decode across that lost history. */
+    before = output_count();
+    queue(device, original, sizeof(original));
+    IHS_HIDSDLApplyPendingWrites(session);
+    pause_ms(10);
+    assert(output_count() == before);
+    sl_rumble_get_snapshot(&snapshot);
+    assert(snapshot.stream[0].desync_rejected == 1);
+    before = apply(session, device, body, sizeof(body));
+    assert_output(before, .5571934f, 0, .5571934f, 0);
+    before = apply(session, device, stop, sizeof(stop));
+    assert_output(before, 0, 0, 0, 0);
+
+    sl_rumble_shutdown();
     sl_rumble_get_snapshot(&snapshot);
     assert(snapshot.worker_starts == 1 && snapshot.worker_joins == 1 && !snapshot.worker_running);
     assert(!snapshot.send_failures && !snapshot.stop_failures);
+    assert(snapshot.stream[0].trigger_commands == 4 && snapshot.stream[0].sony_commands == 7);
+    /* Explicit Sony body stops are playable adaptations too: four generic
+     * trigger commands plus seven Sony body updates, including two stops. */
+    assert(snapshot.stream[0].adapted_effects == 11 && snapshot.stream[0].unsupported_effects == 4);
     IHS_HIDSDLOutputStats output;
     IHS_HIDSDLGetOutputStats(session, &output);
-    assert(output.queued == 3 && output.applied == 3 && !output.rejected && !output.queueDropped);
+    assert(output.queued == queued_commands && output.applied == queued_commands);
+    assert(output.rejected == 1 && output.queueDropped == 2);
     IHS_SessionDestroy(session);
     IHS_HIDProviderSDLDestroy(provider);
     SDL_GameControllerClose(controller);
     SDL_JoystickDetachVirtual(index);
     SDL_Quit();
     IHS_Quit();
-    puts("PASS actual DeviceWrite -> pending drain -> native decoder/worker -> mocked HID, all pulse samples");
+    puts("PASS DeviceWrite -> owner -> worker: native samples, continuous body/trigger, Sony partial controls and gap stop");
 }

@@ -277,6 +277,7 @@ static const IHS_HIDProviderSDLDeviceList HID_DEVICE_LIST = {
     .controller = hid_device_list_controller,
 #ifdef __SWITCH__
     .output = sl_rumble_command,
+    .outputDiscontinuity = sl_rumble_discontinuity,
     .supportsNativeHaptics = sl_rumble_supports_native_haptics,
 #endif
 };

@@ -1979,3 +1979,297 @@ worker，不能解释成 Steam 没连接手柄或 haptics preference=false。它
 正常 flags=0 的受控请求及对应原包/输出可独立证明该次正常通路，无须把空
 状态观察作为成功条件。仍不能据此保证某款游戏会产生这些请求、任意 HD 波形、
 系统读回一致或机械保真。
+
+### 22.18 仅使用现有 Steam 的触觉范围与设备协议路线
+
+**Constraint / Retraction：** 产品的 PC 端只允许现有 Steam；不能要求安装虚拟
+手柄、驱动、伴随服务或游戏插件。撤回此前把“虚拟 USB DualSense + 专用音频
+触觉端点 + 伴随传输”作为本项目工程方案的建议。Foundation Sunshine 等方案
+需要额外主机组件，超出此约束，不能作为本项目能力证明。受控 Windows 工具的
+既有实验只作为诊断证据，不成为产品运行依赖。
+
+**Correction / 验收层级：** 受控 legacy pulse 通过只能证明相应软件通路，
+不能作为“真实 Steam 游戏已启用作者制作的高级触觉”的验收。完整容器相同
+也不能证明游戏选择了正确输出接口。面向游戏的验收必须覆盖设备呈现、游戏
+启用、真实触觉源和 Switch 实际播放，不能继续用控制台刺激替代游戏启用。
+
+**Evidence / Steam 的转换范围：** Valve 的 [ISteamInput 文档](https://partner.steamgames.com/doc/api/isteaminput?l=english)
+把 TriggerVibration 定义为左右普通强度，把 haptic pulse 与 DualSense trigger
+effect 列为不同入口。当前文档的 pulse 支持名单为 Steam Controller/Deck；
+本项目固定 November DLL 中另外存在 §22.11–22.17 已执行的 Switch legacy
+pulse 分支。这些证据不支持“声明为任何高级手柄，Steam 就把所有厂商的高级
+触觉通用翻译”的推论。Steam 会适配输入/普通 rumble，也会生成输入配置反馈；
+这不等于把原生 DualSense authored haptics 自动重编码成 Nintendo HD Rumble。
+[Input Source Modes](https://partner.steamgames.com/doc/features/steam_controller/input_source_modes?l=english)
+中的 Haptics Intensity 是操作反馈设置，不能当作某款游戏的专用触觉开关。
+
+**Evidence / Moonlight-Switch：** XITRIX/Moonlight-Switch
+`30db8fded38ae1dbeb57f34b130afebfffe8e1c5` 的
+[InputManager.cpp](https://github.com/XITRIX/Moonlight-Switch/blob/30db8fded38ae1dbeb57f34b130afebfffe8e1c5/app/src/streaming/InputManager.cpp#L243)
+接收 lowFreqMotor/highFreqMotor 两个 uint16 强度，再调用平台 sendRumble。
+其固定 common-c `e1d2d135820eda76628f9073d0d8c1527bd0cddd` 的反馈回调含普通/
+扳机 rumble、灯光和 adaptive triggers，没有 DualSense 专用触觉 PCM 回调。
+固定 Borealis `ecd896f068efe1899c09cf7b14ba548507fe7cec` 的
+[sendRumbleInternal](https://github.com/XITRIX/borealis/blob/ecd896f068efe1899c09cf7b14ba548507fe7cec/library/lib/platforms/switch/switch_input.cpp#L367)
+从这些强度本地生成 HidVibrationValue，包含强度到频率的换算，再调用 libnx。
+这是本地 rumble 转换的源码证据，不是作者专门设计的 HD 触觉流。不能把它
+与所有 Moonlight 分支等同，也不能仅凭这些源码证明主观效果好坏。该版本的
+amp 字段常量还不能作为本项目合法幅度标定，不能直接照抄并宣称更保真。
+
+**Evidence / 更丰富的实际源：** Sony 的
+[PC DualSense 支持说明](https://www.playstation.com/en-us/support/hardware/pair-dualsense-controller-bluetooth/)
+说明高级触觉需游戏支持，PC 上要求 USB。Nixxes 的
+[Rift Apart 手柄说明](https://support.nixxes.com/hc/en-us/articles/48538226248851-Which-controllers-and-gamepads-are-supported)
+列出有线 DualSense 的完整特性，并列出按游戏关闭 Steam Input 的排障方式。
+Sony 的 [PC 发布说明](https://blog.playstation.com/?p=382715)明确支持其触觉与
+动态扳机。它们证明这类游戏/设备组合可提供专用效果，不证明当前远程 Switch
+profile 已能启用这些效果；不能指导用户在当前仅 Switch profile 下盲关 Steam
+Input 并期待高级触觉或输入仍可用。
+
+**Evidence / Steam 已有的远程设备通道：** 本仓
+`third_party/ihslib/protobuf/hiddevices.proto` 的 CHIDDeviceInfo 声明设备身份，
+CHIDMessageToRemote 有 DeviceWrite、DeviceSendFeatureReport、DeviceGetFeatureReport、
+DeviceStartInputReports；`include/ihslib/hid.h` 的 provider/device class 提供对应
+入口。故现有通道并不限于两路强度，也不需要额外 PC 驱动才能传设备控制字节。
+但 SDK 的 `control_hid.c:InfoFromHID` 当前硬编码 generic 标志/usage/caps，
+SDL provider 也只回答 Generic 的 feature 查询；它**没有实现原生 Steam
+Controller 设备**。自定义 provider 还需扩充枚举描述契约，不能只改 VID/PID。
+
+**Evidence / 当前 Steam 的原生设备分支：** 使用 §22.17 同一 November DLL
+（SHA-256 `669fa08e259277fbf5a1dfe15ce88afe734e89151194304b44d92f418dcc985b`），
+由 MSVC RTTI 定位以下 vtable，并静态反汇编；本节没有执行完整连接实验：
+
+| 位置 | 原始行为 |
+|---|---|
+| CSteamControllerAbstraction vtable `0x1393181e0`，slot 32 `0x1386956b0` | 组装 `8f 08 side on:u16 off:u16 repeat:u16 flags:u8`；保留时长、间隔、重复次数，并非 Nintendo 固定短脉冲 |
+| slot 33 `0x138694160..0x13869448c` | 依设备/能力选择普通 rumble 路径；其中一条计算重复脉冲参数后调用 slot 32，其他分支调用 slot 61，不能把它们当成同一编码器 |
+| CSteamControllerProtocolHandlerV1 `0x139319a60`，slot 5 `0x138697cc0` → slot 9 `0x138697de0` | 为原生命令添加 report-number / padding，转交底层 HID SendFeatureReport |
+| CHIDDeviceRemote `0x1393281c0`，slot 5 `0x1386e6c90` | 组装 command case 6，即远程 DeviceSendFeatureReport；这是 Steam 自带路径 |
+| CSteamControllerTritonPacketAbstraction `0x139318900`，slot 32 `0x138695820` | 使用另一种 `0x81` 输出，仍携带 side/on/off/repeat；不能复用 Generic/Nintendo 的 `0x0d` 解码器 |
+| 同一 Triton vtable slot 44 `0x138695a40` | `0x82` 简单触觉事件输出，不能外推到当前 Generic 的空实现 |
+
+Valve 提供的 SDL
+[controller_constants.h](https://github.com/libsdl-org/SDL/blob/SDL2/src/joystick/hidapi/steam/controller_constants.h)
+也定义 `ID_TRIGGER_HAPTIC_PULSE=0x8f`、设备属性及设置查询；
+[controller_structs.h](https://github.com/libsdl-org/SDL/blob/SDL2/src/joystick/hidapi/steam/controller_structs.h)
+和 [SDL_hidapi_steam.c](https://github.com/libsdl-org/SDL/blob/SDL2/src/joystick/hidapi/SDL_hidapi_steam.c)
+提供输入结构与初始化参考。Linux
+[hid-steam.c](https://github.com/torvalds/linux/blob/master/drivers/hid/hid-steam.c)
+同样区分脉冲的 on/off/count、普通 rumble、2015/2026 不同报告；不能把一种
+设备的报告发送给另一种设备身份。其 GPL 驱动仅作协议参考，不直接引入本项目。
+
+**Conclusion / 零主机安装的工程方向：** 有源码与 Steam 原始分支支持的候选是：
+在 Switch 客户端完整实现 Steam 原生支持的远程设备协议，让 Steam 自己运行
+已有的输入兼容和触觉生成，再将返回的原生命令适配到 libnx。PC 不安装虚拟
+设备；Steam 内部的远程设备对象也不等于 Windows 中的虚拟 USB/音频设备。
+相比继续扩展 Nintendo Generic 的能力位，此路线有望保留更多实际源参数。
+完整会话识别、默认布局、游戏输出选择和效果收益仍属**待验证**，不是已打通。
+
+设备选择必须考虑真实 Switch 的双摇杆与按钮。2015 Steam Controller 的右
+触控板不能无损等同于右摇杆；不能为启用触觉牺牲默认输入。较新设备协议还须
+独立核验识别、握手、输入格式、触控/背键缺席的行为与输出能力，不能从上表
+发现 Triton 分支便宣称任何 Steam Controller/Deck 身份都已可用。
+
+| 实际源 | 此约束下的能力边界 |
+|---|---|
+| 游戏只输出普通左右强度 | 可接收普通源；原生设备路线有望使用 Steam 自带的 rumble→haptics 转换，保留它实际生成的脉冲参数。普通源也有作者设计的时间曲线，但不能据此恢复未输出的独立频率/专用波形 |
+| 游戏主动调用 Steam Input haptic API | 原生设备路线是接收完整脉冲模式的候选；需核验游戏确实调用、Steam 确实下发，而非仅有 Steam Input 输入支持标签 |
+| Steam 配置产生操作触觉 | 可作为无需选游戏的首次真实 Steam 功能验收；之后还必须在游戏内核验，与剧情/受击等游戏源分开 |
+| DualSense 专用音频触觉，或 NS 原作专用效果资源 | 没有找到现有 Steam 远程接口会通用翻译并提供此源的证据；声明设备名称/能力不能补出主机不存在的端点、专用声道或游戏资源，不作为产品承诺 |
+
+**验收合同：** 主机只运行已有 Steam 和游戏；不运行本项目 EXE、注入、驱动或
+服务。确认设备识别与单一输入，完整验证双摇杆/按钮/gyro；用 Steam 自己的
+操作触觉验证原生返回通道。游戏验收中，对同一场景分别确认普通源的转换与
+游戏直接 haptic 源，客户端后台自动标记来源类别、实际参数和提交失败。
+Steam Input 原生输入支持不是游戏触觉支持的证据，DualSense 支持名单也不是
+此路线的兼容名单。不能把桌面反馈、诊断刺激或逐字节相同替代真实游戏验收。
+
+### 22.19 游戏输出接口、原生设备与远程兼容层
+
+**Correction / 架构选择的前置条件：** §22.18 的原生 Steam Controller 路线是
+协议候选，不是已经选定的产品实现。发现更细的输出命令不证明真实游戏使用
+它，也不证明其收益足够覆盖完整设备模拟的成本。选择该路线须先取得现行
+游戏的实际输出类型证据，不能先投入完整实现再假定有相应游戏源。
+
+**Evidence / 游戏如何制作效果：** Epic 的
+[Force Feedback 文档](https://dev.epicgames.com/documentation/en-us/unreal-engine/force-feedback-in-unreal-engine)
+把普通效果定义为随时间变化的通道强度曲线，由游戏事件触发；支持按设备覆盖。
+其中 Audio Based Vibration 使用左右音频通道驱动左右触觉，文档限定 DualSense；
+触发器阻力/震动又是另一组设备属性。它证明作者/引擎选择输出路径，不能把同一
+作品在一平台有高级资源外推为其全部 PC 设备路径都有相同资源。
+
+“协议”须按层区分，不能给一个混合游戏 API、HID 编码与网络承载的固定总数：
+
+| 游戏侧接口 | 实际表达及必要设备条件 |
+|---|---|
+| XInput / SDL 普通 rumble | 两路强度；可随时间连续变化，不是只有开关；不直接指定任意频率或专用 PCM |
+| WGI / GameInput 普通 rumble | 低/高频马达与左右扳机四路强度；增加位置，不等于任意波形 |
+| Steam Input | 普通强度、legacy pulse 的 on/off/repeat、SimpleHaptic 的强度/增益、DualSense 触发器参数是不同入口 |
+| GameInput v2+ 高级触觉 / 游戏原生 DualSense 路径 | 需要相关音频端点，游戏可写触觉波形；不能与 GameInput 普通四强度混同 |
+| Nintendo 平台接口与设备 HID | 每个震动器的双频带振幅/频率；有明确设备编码，但不是跨厂商通用 PC 游戏高级触觉 API |
+
+Microsoft 的 [XINPUT_VIBRATION](https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_vibration)
+定义两个 WORD；[GameInputRumbleParams](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/input/gameinput/structs/gameinputrumbleparams)
+定义四个 float。另一路 [GameInputHapticInfo](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/input/gameinput/structs/gameinputhapticinfo)
+查询专用音频端点及各声道位置；[高级触觉硬件要求](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/input/hardware/input-hardware-haptics)
+要求输入设备与音频端点关联。微软
+[Gamepad/HapticsManager](https://github.com/microsoft/Xbox-GDK-Samples/tree/main/Samples/System/Gamepad/HapticsManager)
+使用 WASAPI/XAudio2 播放触觉波形。不存在从“GameInput 支持高级触觉”直接推导
+“Steam 远程对象具备对应 Windows 音频端点”的依据。
+
+SDL 的 [SendGamepadEffect](https://wiki.libsdl.org/SDL3/SDL_SendGamepadEffect)
+允许设备专用字节，不能把全部 SDL 概括为只会普通 rumble。
+[Nintendo 后端](https://github.com/libsdl-org/SDL/blob/main/src/joystick/hidapi/SDL_hidapi_switch.c)
+分别处理普通强度编码和原生 rumble report；libnx 的 HidVibrationValue 也明确
+包含两频带幅度/频率。瓶颈应定位到游戏选择的源接口、Steam 输出后端或本地
+实现，不应归咎于“没有 Nintendo 设备协议”。
+
+**Evidence / Sony 的 PC 支持：** Sony 的
+[当前支持说明](https://www.playstation.com/en-us/support/hardware/pair-dualsense-controller-bluetooth/)
+正式列出 Windows 10/11、USB/Bluetooth；PC 高级触觉须游戏支持并要求 USB。
+完整虚拟设备能工作的原理是满足游戏实际使用的设备/端点契约，不是 PC 游戏
+天生不可能支持 Sony。该原理不撤销 §22.18 禁止安装主机组件的约束。
+
+**Evidence / Steam 识别设备不等于原生 USB 直通：** Valve 的
+[Gamepad Emulation Best Practices](https://partner.steamgames.com/doc/features/steam_controller/steam_input_gamepad_emulation_bestpractices)
+说明 Remote Play 使用 Steam Input 提供输入；Windows 上通过 Overlay 接管
+传统 API 并提供模拟 Xbox 设备。游戏可经 Steam Input handle 另查真实类型/
+图标，但这不是 Sony HID 与触觉音频端点。游戏原生 Sony 输出不会因原设备
+类型可查询而自动改用 Steam Input 的输出 API。
+
+2021-12-06 的 [FFXIV Steam Link 原帖](https://steamcommunity.com/app/353380/discussions/7/3193611900717183832/)
+中 slouken 明确表示该游戏的 PS5 支持仅限直接连接。它是当时该游戏的边界，
+不单独充当所有新版本的定论；当前公开兼容层文档及本项目已有远程 HID 结构
+同样不能证明完整 Sony 音频直通。SetDualSenseTriggerEffect 的参数输出不等于
+专用触觉 PCM。更换客户端 VID/PID 不能解决这层缺失。
+
+**Evidence / 游戏支持须附平台、接口与版本：**
+
+| 游戏 / 资料 | 已证明的支持 | 不能据此认定 |
+|---|---|---|
+| Left 4 Dead 2，[Valve 2015-12-18 更新](https://store.steampowered.com/oldnews/19771) | 专门添加 Steam Controller haptics | 现行版本必发重复 pulse；2022 官方另有经 Steam Input 启用 rumble 的变更，需要区分 |
+| 历史 CS:GO，[Valve 2015-12-17 更新](https://blog.counter-strike.net/2015/12/13409/) | Steam Controller haptic feedback 及 steam_controller_haptics 开关 | CS2 当前支持相同源 |
+| Rift Apart / Returnal，[Nixxes](https://blog.playstation.com/?p=382715) / [PlayStation PC 发布说明](https://blog.playstation.com/2023/01/18/returnal-launches-on-pc-february-15/) | PC 原生 DualSense 触觉及扳机功能 | 经 Steam Link 自动转换给 Switch 或 Steam Controller |
+| 1-2-Switch，[Nintendo 玩法说明](https://www.nintendo.com/en-gb/News/2017/March/Let-s-have-a-look-at-some-of-the-fun-ways-to-face-off-in-1-2-Switch--1206994.html) | Joy-Con HD Rumble 数球等专用设计 | Steam PC 游戏支持；该示例也不证明 Pro Controller 兼容 |
+| Thumper，[开发者 2018-06-28 回复](https://steamcommunity.com/app/356400/discussions/0/3211505894137045717/) | 明确区分 PC 基本输入与 Switch 版 HD Rumble | 2026 全部版本仍相同，或 PC 其他作品均无 HD |
+
+Portal 2 等的 Steam Input 输入集成、Shadow of the Tomb Raider 的社区高级触觉
+报告均不能冒充已核实的现行游戏输出接口。没有现行调用/运行证据时，不把
+“未找到认证样本”写成“没有任何游戏支持”，也不填造已验证兼容名单。
+
+**Conclusion / 产品边界：** 零主机安装时，只能消费 Steam 实际取得并通过
+既有远程协议输出的源。Steam 普通 rumble 转换与配置反馈有实际用途，但游戏
+专门触觉取决于游戏选择的接口；原生 Steam Controller 不是 DualSense 兼容桥。
+架构验收须先以现行游戏明确源接口与设备呈现，再要求端到端接收/本机播放。
+
+### 22.20 普通双路震动的利用程度与质量合同
+
+**Correction：** §22.8 的固定 Valve/SDL 普通参数一致性不是 Switch 最佳手感
+认证。两路原值进入了客户端，不等于强度、频感、播放时序都已得到最佳利用；
+软件参数一致性与机械/感知效果必须分开。
+
+**Evidence / 当前幅频映射：** `hd_rumble.c:sl_hd_ordinary_word` 把每路 uint16
+输入按 101 个阈值（含静音）量化，再经原生 decoder 输出。非零状态的两个
+频带都约 149.933Hz；最大输入对应每频带振幅约 0.5571934。这与 §22.8 的
+固定参考一致，却没有据此证明两路的厚重/细腻区别或弱/强动态范围对本机最优。
+libnx 振幅数值不能直接当作感知力度百分比；也不能从 0.557 推导“只发挥了
+55.7%”或把所有值放大到 1.0 就宣称更保真。Handheld/JoyDual 将两路分侧，
+Pro 向两侧各提供两频带；它是参考布局，不是统一机械等价性的证明。
+
+**Evidence / 普通短事件覆盖：** `sdl_hid_write.c` 先记录 received，再在 media
+owner 的 ApplyPendingWrites 循环交给 `sl_haptic_command`。普通分支每条覆盖
+`current`，清空 pending native queue，`due=now`，到期从 drain 时刻计算；
+与原生样本不同，普通强度变化没有按接收间隔进入播放队列。
+
+直接编译当前生产 `haptic_stream.c` / `hd_rumble.c` 的离线反例：on 在 t 收到、
+off 在 t+50ms 收到，分别 advance 得到非零与静音；两条都在 t+60ms 应用，
+随后 advance 只得到静音，第二条输出不存在。worker 不必然在两次回调间获得
+调度，因此这是合法交错下可复现的信息损失；**未证明用户某次游戏运行遇到
+该交错**，也未量出实机发生率。对照材料在
+`build/haptics-game-research-20261118/ordinary-audit/`；不执行网络、线程或硬件。
+
+**Conclusion / 基础质量要求：** 普通双路路径仍有可改进空间，不能宣称已最优。
+接收、命令生命周期和播放应保持可审计的时间语义，避免 owner 卡顿无声吞掉
+短事件；同时为过期/积压明确限制延迟与降级，不能靠无限重放旧事件掩盖问题。
+映射应利用本机原生幅频控制，独立保留两路变化，标定弱震阈值、动态范围及
+两路频感，不能仅按“更响/更大”认证更好。Nintendo 原生命令的 wire decoder
+状态须独立保留，不能因改普通渲染而污染后续相对原生解码。
+
+主机 Generic 非零更新的已有 50ms 限流证据见 §22.2；客户端只可能保留实际
+收到的信息，不能重建主机未传输的变化。基础路径的接收/输出/短事件证据与
+真实手感评估均是验收条件，固定编码器字节一致不是最终质量条件。
+
+**Scope：** 基础普通震动质量是优先方向；原生 Steam Controller 设备模拟退出
+本项目此次实施主线。Sony 身份仅作为 Steam 已有输出路径的可行性研究，
+不能未经原生游戏设备呈现与触觉端点证据就转成产品实现。
+
+### 22.21 客户端保真与上游启用的独立合同
+
+**Decision：** 两个工程层分别实现、分别验收。客户端层针对已知反馈的实际
+参数、顺序、时序与 Switch 可表达范围；上游层针对设备描述、能力声明、Steam
+及游戏选择哪个接口。客户端夹具不得冒充游戏实际来源，上游未启用也不应阻止
+客户端独立验证。不依赖安装 PC 驱动、虚拟手柄、伴随服务或游戏插件。
+
+| 客户端输入 | 接收与本机输出合同 | 单独保留的边界 |
+|---|---|---|
+| Generic `01` 普通强度 | 保留 uint16 两路原值、源时间间隔和 duration；直接连续映射原生幅度，160/320Hz 区分频带 | 频率是渲染策略，非游戏提供；数值线性不是感知线性 |
+| Generic `06` trigger rumble | 与身体反馈独立的状态、停止和到期；转换到对应手的高频带，并计为适配 | Switch 没有扳机马达；同频带竞争取较大幅度，不是原物理位置/力学还原 |
+| Generic `0d` + Nintendo 10B | 七格式状态解码、完整样本、双侧独立双频带、5ms 最小保持；相对历史与普通渲染独立 | IPC 参数与实际机械响应仍须分别验证 |
+| Generic `0d` + Sony 47B | 严格容器/模式/有效位，保留完整 raw 与扳机块；可播放的模拟 rumble 转为普通双路渲染 | 47B 不含专用 PCM；扳机阻力/音频/灯光/未知功率控制显式记为不可还原 |
+| 显式专用双侧 PCM 本地入口 | 明确格式、左右布局、采样率、epoch/seq/PTS；FFT 选两峰并拟合幅度，按5ms hop 输出每侧双频带 | 只是准备好的客户端适配器；不定义新 Steam wire，也不证明 Steam 已提供此源 |
+
+**Correction / 普通映射：** §22.8 的编码/量化保留为 Nintendo 相对解码的源
+历史及独立参考，不再限制普通播放。默认每频带数值峰值仍取参考约 0.5571934，
+避免无标定就放大到 1.0；输入到输出不再经过旧101档。160/320Hz 依据
+Linux hid-nintendo 的默认频带及 libnx 参数接口，是可验证的起点，不能宣称
+机械最优。Pro 双侧各保留双频带；Handheld/JoyDual 分侧；单 Joy-Con 合并
+普通两源到其一只震动器。专用立体 PCM 要求双震动器，单 Joy-Con 拒绝并记账，
+不能无声丢掉一侧或把单侧输出称为完整空间还原。
+
+**Timeline：** 身体状态（普通/Nintendo/Sony/PCM）按源事件选择，trigger 是
+独立叠加通道。源队列有界；普通收到 start/stop 同批处理时保留接收间隔。
+后来的身体状态只替换尚属其未来的旧 Nintendo 样本，已经排在它前面的样本
+仍可播放；有意替换、溢出丢弃、过期、实际提交分别记账。普通间隔按提交时刻
+保持，不能把每次 IPC 耗时叠进跨包间隔；原生/PCM 样本的5ms最低保持按完成
+时刻约束。trigger 更新不能挤占 Nintendo 的源样本节奏。
+
+播放采用250ms软件迟到预算。超预算不无限重放旧事件，而是计数并清零；它
+不是网络端到端延迟保证。失败重试不能越过已到期的通道期限，也不能阻塞已
+到时刻的同通道停止。partial update 与到期同刻/晚到时，先清实际已过期状态，
+不能组合出过期的非零身体反馈。本地退出/断线/换设备直接清队列并归零。
+
+**Continuity：** SDK 接收队列8192B，最多106条69B效果（每条另有8B时间戳）；
+保留已接受前缀，发生丢失后拒绝后续命令，owner 在前缀之后通知后端间断。
+Switch 后端停止并标记 Nintendo wire 失步；随后相对包拒绝，直到完整绝对
+报告或普通源基线恢复。下游播放队满则记录失败、停止并保留已知 wire 历史。
+SDK 的结构新增可选 outputDiscontinuity，所有 provider/调用者须一起重编译。
+没有高频同步网络日志，也没有新增 detached 线程或退出次序例外。
+
+**Sony 模式依据与更正：** 不能将模拟 rumble 的模式位都当成“缺失则保持”的
+普通有效位。未修改 SDL3 原始 UpdateEffects 每次清47B并在 rumble 非零时重新
+填模式和 motor；为零时明确恢复音频触觉。独立提取原函数执行的实验与结构
+在 `build/sony-haptics-reference/`，只替换 context/硬件终端。因此客户端按
+Steam/SDL 效果合同识别 AUDIO/DISABLED handoff，停止此前 Sony 身体反馈；
+不把 handoff 当作 PCM。另一来源已接管身体输出时，旧 Sony handoff 不得
+将它停掉。功率字段的第三方参考存在矛盾，非零未知值保留/记账，不猜增益。
+这些是软件合同与原 producer 证据，不是 Sony 固件机械行为的实测认证。
+
+**专用 PCM 合同：** `pcm_haptics.h` 只接受显式 LEFT_GRIP/RIGHT_GRIP、S16LE /
+IEEE F32LE，8/16/48kHz，严格字节长度、有限值、块大小、epoch/序号及样本时钟。
+不从两声道猜布局，不把游戏主音效当作者触觉。固定40ms Hann窗、5ms hop，
+窗中心到窗尾20ms源时钟分析滞后；实际运算、网络、队列和机械延迟另计。
+起点补20ms已知静音，EOS补右半窗并归零；断点清旧分析/待播输出。有限队列
+满时整块拒绝，不悄悄丢样或自动增益归一化。
+
+FFT 双峰/幅度拟合保留侧向和主要载波，反馈残差、带外/DC能量、5ms包络误差、
+参数 RMS 和限幅。40ms窗口会平滑瞬态，两个载波不能保存任意宽带波形或相位。
+拟合内部使用相位只为测表示误差，libnx 没有对应相位字段，不能称原样PCM
+播放。分析器必须在渲染、输入与 actuator deadline 热路径之外运行；owner 只
+提交分析后的 typed 帧。运行诊断 `pcm_steam_source_ready=false` 明确不宣称
+已发现 Steam 传输入口；8f/EA/81/82 等原生设备协议也不冒充 Generic 格式。
+
+**独立验收：** 保留原 Nintendo 夹具及其验证器；另有内嵌14命令的新反馈矩阵，
+覆盖普通批量短震、body/trigger独立停止、Sony模式切换与 Nintendo 样本。
+同一 NRO 夹具在桌面以硬件终端替身执行；checker 必须区分 host-simulation 与
+Switch。全部离线可核输入/参数/顺序/时间/失败路径，不据此认证游戏已启用、
+系统 IPC 读回、机械保真或 hbmenu 屏幕状态。工具用法见 UDP_DEBUG。

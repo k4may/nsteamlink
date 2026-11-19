@@ -191,7 +191,9 @@ add_library(nsl_platform STATIC platforms/common/application.c platforms/common/
 target_include_directories(nsl_platform PRIVATE ${CMAKE_SOURCE_DIR}/third_party/ihslib/src
     ${CMAKE_SOURCE_DIR}/third_party/ihslib/src/client ${CMAKE_SOURCE_DIR}/third_party/ihslib/src/protobuf)
 target_compile_options(nsl_platform PRIVATE -Wall -Wextra -Wno-unknown-pragmas)
-target_sources(nsl_platform PRIVATE platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+set(NSL_HAPTIC_SOURCES platforms/common/hd_rumble.c platforms/common/haptic_stream.c
+    platforms/common/rumble_render.c platforms/common/sony_haptics.c platforms/common/pcm_haptics.c)
+target_sources(nsl_platform PRIVATE ${NSL_HAPTIC_SOURCES})
 target_link_libraries(nsl_platform PUBLIC m)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/background.c"
     COMMAND "${CMAKE_COMMAND}" -DINPUT=${CMAKE_SOURCE_DIR}/assets/branding/background.bmp
@@ -1470,7 +1472,7 @@ endif()
 
 if(NSL_PLATFORM STREQUAL "desktop")
     add_executable(nsl-rumble-tests tests/test_rumble.c platforms/switch/rumble.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-rumble-tests PRIVATE tests/fakes)
     target_compile_definitions(nsl-rumble-tests PRIVATE NSL_RUMBLE_TEST=1)
     target_compile_options(nsl-rumble-tests PRIVATE -Wall -Wextra -UNDEBUG)
@@ -1478,7 +1480,7 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-rumble COMMAND nsl-rumble-tests)
     set_tests_properties(nsl-rumble PROPERTIES TIMEOUT 15)
     add_executable(nsl-haptic-pipeline-tests tests/test_haptic_pipeline.c platforms/switch/rumble.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptic-pipeline-tests PRIVATE src tests/fakes
         ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
     target_compile_definitions(nsl-haptic-pipeline-tests PRIVATE NSL_RUMBLE_TEST=1)
@@ -1487,17 +1489,30 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-haptic-pipeline COMMAND nsl-haptic-pipeline-tests)
     set_tests_properties(nsl-haptic-pipeline PROPERTIES TIMEOUT 10)
     add_executable(nsl-haptics-probe-host tests/test_haptics_probe_host.c platforms/switch/rumble.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptics-probe-host PRIVATE src tests/fakes
         ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
     target_compile_definitions(nsl-haptics-probe-host PRIVATE NSL_RUMBLE_TEST=1 NSL_HAPTICS_PROBE_HOST=1 NSL_DIAGNOSTICS=1)
     target_compile_options(nsl-haptics-probe-host PRIVATE -Wall -Wextra -Wno-unknown-pragmas -UNDEBUG)
     target_link_libraries(nsl-haptics-probe-host PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads m)
+    add_executable(nsl-feedback-probe-host tests/test_haptics_probe_host.c
+        platforms/switch/rumble.c ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-feedback-probe-host PRIVATE src tests/fakes
+        ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
+    target_compile_definitions(nsl-feedback-probe-host PRIVATE NSL_RUMBLE_TEST=1
+        NSL_HAPTICS_PROBE_HOST=1 NSL_FEEDBACK_MATRIX=1 NSL_DIAGNOSTICS=1)
+    target_compile_options(nsl-feedback-probe-host PRIVATE -Wall -Wextra -Wno-unknown-pragmas -UNDEBUG)
+    target_link_libraries(nsl-feedback-probe-host PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads m)
+    add_test(NAME nsl-feedback-probe-host COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/tools/check-feedback-matrix.py" --probe $<TARGET_FILE:nsl-feedback-probe-host>)
+    set_tests_properties(nsl-feedback-probe-host PROPERTIES TIMEOUT 15)
+    add_test(NAME nsl-feedback-matrix-verifier COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_feedback_matrix_verifier.py")
     add_test(NAME nsl-haptics-probe-host COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_probe_host.py" --probe $<TARGET_FILE:nsl-haptics-probe-host>)
     set_tests_properties(nsl-haptics-probe-host PROPERTIES TIMEOUT 15)
     add_executable(nsl-haptics-calibration-host tests/test_haptics_probe_host.c platforms/switch/rumble.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptics-calibration-host PRIVATE src tests/fakes)
     target_compile_definitions(nsl-haptics-calibration-host PRIVATE NSL_RUMBLE_TEST=1
         NSL_HAPTICS_PROBE_HOST=1 NSL_HAPTICS_CALIBRATION_HOST=1 NSL_DIAGNOSTICS=1)
@@ -1506,18 +1521,46 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-haptics-calibration-host COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_calibration.py" --probe $<TARGET_FILE:nsl-haptics-calibration-host>)
     set_tests_properties(nsl-haptics-calibration-host PROPERTIES TIMEOUT 15)
+    add_executable(nsl-rumble-render-tests tests/test_rumble_render.c
+        platforms/common/rumble_render.c platforms/common/hd_rumble.c)
+    target_include_directories(nsl-rumble-render-tests PRIVATE src)
+    target_compile_options(nsl-rumble-render-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-rumble-render-tests PRIVATE m)
+    add_test(NAME nsl-rumble-render COMMAND nsl-rumble-render-tests)
+    add_executable(nsl-sony-haptics-tests tests/test_sony_haptics.c platforms/common/sony_haptics.c)
+    target_include_directories(nsl-sony-haptics-tests PRIVATE src)
+    target_compile_options(nsl-sony-haptics-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    add_test(NAME nsl-sony-haptics COMMAND nsl-sony-haptics-tests)
     add_executable(nsl-haptic-stream-tests tests/test_haptic_stream.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptic-stream-tests PRIVATE src)
     target_compile_options(nsl-haptic-stream-tests PRIVATE -Wall -Wextra -UNDEBUG)
     target_link_libraries(nsl-haptic-stream-tests PRIVATE m)
     add_test(NAME nsl-haptic-stream COMMAND nsl-haptic-stream-tests)
     add_executable(nsl-haptic-source-time-tests tests/test_haptic_source_time.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptic-source-time-tests PRIVATE src)
     target_compile_options(nsl-haptic-source-time-tests PRIVATE -Wall -Wextra -UNDEBUG)
     target_link_libraries(nsl-haptic-source-time-tests PRIVATE m)
     add_test(NAME nsl-haptic-source-time COMMAND nsl-haptic-source-time-tests)
+    add_executable(nsl-haptic-timeline-tests tests/test_haptic_timeline.c
+        ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-haptic-timeline-tests PRIVATE src)
+    target_compile_options(nsl-haptic-timeline-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-haptic-timeline-tests PRIVATE m)
+    add_test(NAME nsl-haptic-timeline COMMAND nsl-haptic-timeline-tests)
+    add_executable(nsl-pcm-haptics-tests tests/test_pcm_haptics.c platforms/common/pcm_haptics.c)
+    target_include_directories(nsl-pcm-haptics-tests PRIVATE src)
+    target_compile_options(nsl-pcm-haptics-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-pcm-haptics-tests PRIVATE m)
+    add_test(NAME nsl-pcm-haptics COMMAND nsl-pcm-haptics-tests)
+    add_executable(nsl-haptic-pcm-tests tests/test_haptic_pcm.c ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-haptic-pcm-tests PRIVATE src)
+    target_compile_options(nsl-haptic-pcm-tests PRIVATE -Wall -Wextra -UNDEBUG)
+    target_link_libraries(nsl-haptic-pcm-tests PRIVATE m)
+    add_test(NAME nsl-haptic-pcm COMMAND nsl-haptic-pcm-tests)
+    add_test(NAME nsl-feedback-deploy COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_switch_feedback_deploy.py")
     add_test(NAME nsl-haptics-verifier COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptics_verifier.py")
     add_test(NAME nsl-steam-haptics-host-correlation COMMAND "${Python3_EXECUTABLE}"
@@ -1761,7 +1804,7 @@ if(NSL_PLATFORM STREQUAL "switch")
     nx_create_nro(nsl-sixaxis-probe OUTPUT nsl-sixaxis-probe.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/sixaxis_probe.nacp")
 
     add_executable(nsl-haptics-probe tests/switch_haptics_probe.c platforms/switch/rumble.c
-        platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+        ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-haptics-probe PRIVATE src
         ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
     target_compile_definitions(nsl-haptics-probe PRIVATE NSL_DIAGNOSTICS=1)
@@ -1770,10 +1813,17 @@ if(NSL_PLATFORM STREQUAL "switch")
         Threads::Threads nx m)
     nx_generate_nacp(OUTPUT haptics_probe.nacp NAME "NSteamLink Haptics Probe" AUTHOR "NSteamLink" VERSION "1.0.0")
     nx_create_nro(nsl-haptics-probe OUTPUT nsl-haptics-probe.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/haptics_probe.nacp")
+    add_executable(nsl-feedback-probe tests/switch_haptics_probe.c platforms/switch/rumble.c ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-feedback-probe PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
+    target_compile_definitions(nsl-feedback-probe PRIVATE NSL_DIAGNOSTICS=1 NSL_FEEDBACK_MATRIX=1)
+    target_compile_options(nsl-feedback-probe PRIVATE -Wall -Wextra)
+    target_link_libraries(nsl-feedback-probe PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads nx m)
+    nx_generate_nacp(OUTPUT feedback_probe.nacp NAME "NSteamLink Feedback Probe" AUTHOR "NSteamLink" VERSION "1.0.0")
+    nx_create_nro(nsl-feedback-probe OUTPUT nsl-feedback-probe.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/feedback_probe.nacp")
 
     if(NSL_BUILD_TOOLS AND NSL_DIAGNOSTICS)
         add_executable(nsl-haptics-calibration tests/switch_haptics_calibration.c platforms/switch/rumble.c
-            platforms/common/hd_rumble.c platforms/common/haptic_stream.c)
+            ${NSL_HAPTIC_SOURCES})
         target_include_directories(nsl-haptics-calibration PRIVATE src)
         target_compile_definitions(nsl-haptics-calibration PRIVATE NSL_DIAGNOSTICS=1)
         target_compile_options(nsl-haptics-calibration PRIVATE -Wall -Wextra)
