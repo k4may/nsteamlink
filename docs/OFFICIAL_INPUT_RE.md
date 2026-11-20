@@ -2320,3 +2320,51 @@ Sony按提交时刻续锚，不将IPC耗时累加进去。队列空且收到cuto
 替身通过持有前一slot的IPC，分别跨过10ms期限与250ms预算验证。已经进入
 的同步IPC无法撤回；检查之后的OS抢占和系统内部机械时刻仍非硬实时保证。
 离线软件证据不替代Switch系统读回、负载或机械验收。
+
+### 22.22 频率参考、演示取值与跨设备幅度映射
+
+**Evidence / 接口与编码：** libnx 的公开
+[HidVibrationValue](https://github.com/switchbrew/libnx/blob/master/nx/include/switch/services/hid.h)
+分别提供 low/high 幅度与 Hz，幅度字段注释1.0为最大参数值；没有“任意频率
+在同一幅度下同样可感知”的保证。固定
+[Linux v6.12 hid-nintendo](https://github.com/torvalds/linux/blob/v6.12/drivers/hid/hid-nintendo.c)
+列出频率编码表，默认值160/320Hz；不同频带有不同的可编码范围。
+[MissionControl 原作者的解码器](https://github.com/ndeadly/MissionControl/blob/71a837fcff422a652bd1326a214f925792ae8449/mc_mitm/source/controllers/switch_hd_rumble_decoder.cpp)
+提供压缩样本的中心频率160/320Hz及对数频率/幅度坐标。这些是公开实现与
+研究结果，不冒充任天堂闭源SDK推荐、游戏作者的具体效果或机械标定表。
+
+**Evidence / 演示取值：** `haptic_experience.h` 的80/160/320/640Hz是围绕
+160/320Hz选取的倍频测试点，不是四档硬件模式，不是从某个游戏提取。AM
+编码64由对应原生解码得到约0.2554743；这个场景不经过普通渲染的0.5571934
+峰值缩放。前两档使用low、后两档使用high，同时改变频率与参数带，不能
+凭它隔离频率响应或认证四档等感强度。它也不构成真实游戏常用频率的统计。
+
+**Evidence / 机械参考：** Alps Alpine 原厂公开的
+[AFT原理资料](https://tech.alpsalpine.com/e/products/faq/haptic/reactor/)
+描述160/320Hz两个共振点，两个振动方向可组合；其
+[产品FAQ](https://tech.alpsalpine.com/e/products/faq/haptic/)
+明确说明加速度随输入频率形成有峰值的曲线，并以加速度计测量固定到100g
+悬置块上的器件来评价激振力。该原厂资料能支持“频率与相同输入下的输出
+强度有关”的机理；没有据此识别调试手柄中的具体料号、装配耦合或系统补偿，
+不能把裸器件规格当作该手柄的实测频响/补偿曲线。
+
+**Evidence / 游戏输入：** 微软
+[XINPUT_VIBRATION](https://learn.microsoft.com/en-us/windows/win32/api/xinput/ns-xinput-xinput_vibration)
+为两路0..65535 motor speed，不含独立Hz字段；Unity的
+[Gamepad rumble示例](https://docs.unity3d.com/Packages/com.unity.inputsystem@1.14/manual/Gamepad.html#rumble)
+调用`SetMotorSpeeds(0.25f, 0.75f)`，同样不是指定25/75Hz。
+Steamworks `TriggerVibration`也是两路强度，不能从通用接口假定游戏作者
+给出了任天堂的频率/幅度。原生专用效果和专用PCM属于不同输入合同，见§22.21。
+
+**Conclusion / 映射边界：** 普通渲染的160/320Hz有上游驱动默认参考；
+`normalized_strength * 0.5571934`只是保留SDL固定参考峰值的数值策略，
+没有证明它是跨设备等效力度、等感知映射或弱震最优值。原生Nintendo样本
+则直接按原协议坐标解释，不套用这个普通峰值，不把作者频率压成演示四档。
+两者的力度校准问题须分开：普通适配需覆盖弱震阈值/动态范围/左右通道，
+原生解码需验证源参数及系统实际响应；读回参数不是机械加速度。
+
+**Hypothesis / 待验证：** 高频感知减弱可能涉及器件/装配频响、幅度或系统
+处理；公开资料不能决定该设备的具体原因。隔离验证应固定一只震动器与
+频率，在两个参数带的可表达交叠范围内比较，再固定频带逐级改变幅度；
+保存活动参数读回、用户观察及可获得的外部机械测量。不能仅凭编码合法或
+成功IPC就认为游戏实际弱震/高频效果必然可感知，也不能无标定统一放大。

@@ -607,3 +607,37 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 体验能区分效果只证明本地输出具备相应表达能力；既不证明Steam已发送该源，
 也不能据此判断某个游戏没有支持。软件提交、系统参数读回、机械响应与用户
 主观辨别仍分别记录。
+
+### Steam 实时震动控制面板（Windows）
+
+`tools/steam-haptics-panel-win.c` 是可从Steam库启动的Windows x64程序。
+将构建包中的EXE添加为“非Steam游戏”，Switch正常连接主机后从Steam库启动。
+默认用游戏通用的`XInputSetState`，可切换公开`SteamInput006::TriggerVibration`；
+继承启动上下文，不借用其他游戏AppID，也不读取/修改Steam私有门禁。
+不依赖虚拟手柄驱动，不携带Valve DLL，不改变客户端设备身份/能力。
+
+两路0..65535力度可拖动或精确输入，支持持续/单次/重复脉冲；开关时间及
+播放上限可实时调整。模式/目标改变、失焦、断线、停止键、关闭会归零；重新
+连接或恢复焦点不自动恢复播放。设置保存到本地用户目录，下次启动不需重编译。
+程序从游戏层发送普通双路强度；物理Hz仍由客户端普通映射决定。
+
+输入Switch地址后，独立可join线程仅查询UDP28772的`haptics`及分页
+`haptic-trace`，不向设备注入震动。界面分别显示最近接收的源类型/普通原值、
+两只震动器的提交参数。主机请求与带采集时刻的设备记录共同保存在
+`%LOCALAPPDATA%\NSteamLink\HapticsPanel\session-*.jsonl`；可从面板打开目录。
+主机API返回、收到命令、IPC提交以及用户手感分别判断，不能仅凭调用返回
+认证Remote Play交付。若XInput未出现手柄，可对比Steam Input路径，并检查
+该非Steam程序启用Steam输入及“手柄”布局。全链路测试运行正常客户端，
+不运行独立本机体验NRO。
+
+```sh
+python3 tools/build-steam-haptics-panel.py --output build/haptics-panel/package
+ctest --test-dir build/desktop -R '^nsl-haptics-panel-state$' --output-on-failure
+xvfb-run -a python3 tools/test-steam-haptics-panel.py \
+  --output build/haptics-panel/tests --wine-prefix build/haptics-panel/wine-prefix
+```
+
+构建包只含EXE、使用说明和manifest。桌面状态测试遍历全部uint16值并覆盖
+实时修改、脉冲边界、到期归零；Wine执行真实Win32控件/窗口事件/定时器与
+UDP收集，Steam/XInput终端为不分发的测试DLL，覆盖失焦、断线、切换目标、
+无效输入、脉冲、关闭归零和配置保存。该替身不认证真实Steam或Remote Play。

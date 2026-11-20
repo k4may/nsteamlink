@@ -1471,6 +1471,9 @@ if(NSL_PLATFORM STREQUAL "desktop")
 endif()
 
 if(NSL_PLATFORM STREQUAL "desktop")
+    add_executable(nsl-haptics-panel-state-tests tests/test_haptics_panel_state.c)
+    target_compile_options(nsl-haptics-panel-state-tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    add_test(NAME nsl-haptics-panel-state COMMAND nsl-haptics-panel-state-tests)
     add_executable(nsl-rumble-tests tests/test_rumble.c platforms/switch/rumble.c
         ${NSL_HAPTIC_SOURCES})
     target_include_directories(nsl-rumble-tests PRIVATE tests/fakes)
