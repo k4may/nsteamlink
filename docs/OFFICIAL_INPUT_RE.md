@@ -2687,3 +2687,48 @@ flags=0；整个面板会话没有非零普通桌面请求，唯一普通请求�
 保留原始整数并另输出布尔值，不把非1整数当作未知门禁。
 面板原生模式将原来的通用播放按钮明确标为“单次短脉冲（很弱）”，
 避免把请求重复数误解成Switch必然执行的重复次数；没有修改原生增益或波形。
+
+### 22.32 游戏样本与设备接口的证据分级
+
+**Correction：** 用户报告《Aperture Desk Job》已经安装且键位不正确。
+撤回把“免费、展示Deck功能”当作当前Switch配置优先验收样本的建议。
+这是实际输入兼容异常，尚未定位到布局、动作集或设备上报的具体一层；
+不能据此推断原生解码错误，也不能忽略该异常继续将游戏称为开箱可验收。
+
+**Evidence / PC DualSense：** Sony当前
+[PC配件与游戏支持页](https://www.playstation.com/en-us/pc/pc-accessories/)
+将Monster Hunter Wilds列在具有DualSense沉浸功能的Steam PC游戏名单；
+[硬件支持说明](https://www.playstation.com/en-us/support/hardware/pair-dualsense-controller-bluetooth/)
+明确PC专用触觉要求USB。另有开发商对
+[Returnal](https://blog.playstation.com/2023/01/18/returnal-launches-on-pc-february-15/)、
+[Stellar Blade](https://blog.playstation.com/?p=404865)、
+[Death Stranding 2](https://support.nixxes.com/hc/en-us/articles/49584441309971-What-are-the-PC-features-in-DEATH-STRANDING-2-ON-THE-BEACH)
+的PC触觉/扳机支持说明。因此有真实游戏源可研究，不应以旧式Steam短脉冲
+代表全部PC高级触觉。这些页面不证明游戏会向当前Switch身份提供同一效果，
+也不证明Remote Play已传输了所需专用波形。
+
+《荒野》Steam商店API的categories明确包含59（Steam Input API Support）和
+57（DualSense Controller Support）。不能对所有Sony游戏统一套用“关闭Steam
+Input”：Nixxes官方排障与《荒野》的实际接口条件必须按游戏区分。
+Capcom FAQ `https://www.monsterhunter.com/support/wilds/en/faq/detail/054`
+本次直接读取返回403；社区转述的“USB且开启Steam Input”“Switch HD不支持”
+不提升为本次已直接核验的官方原文结论。
+
+**Evidence / 可复现场景候选：** Polyarc的
+[Demo Update 1.1](https://steamstore-a.akamaihd.net/news/externalpost/steam_community_announcements/1835871199305861)
+明确为Moss: The Forgotten Relic的治疗教学中Quill受击增加触觉事件。
+当前[商店页](https://store.steampowered.com/app/3914860/Moss_The_Forgotten_Relic/)
+仍提供试玩版，商店API返回demo AppID4607010；官方FAQ确认它是非VR平面游戏。
+这是有明确游戏事件的候选，**“haptic event”措辞及Steam Input支持标签仍不证明
+它使用Legacy pulse、SimpleHaptic还是普通TriggerVibration**；实际接口与
+当前Switch身份的输出选择须另取证，不能填入已认证原生兼容名单。
+
+**平台边界：** Nintendo官方的1-2-Switch数球、Super Mario Odyssey及
+Taiko no Tatsujin: Drum 'n' Fun!有Switch版HD rumble说明；它们可作硬件效果
+参考，不能变成Steam PC游戏的Nintendo原生输出名单。Xbox/GameInput的
+四强度rumble和Sony扳机阻力也不是同一种效果。Microsoft
+[波形触觉硬件要求](https://learn.microsoft.com/en-au/xbox/gdk/docs/features/common/input/hardware/input-hardware-haptics?view=gdk-2604)
+另有匹配Windows音频端点的契约；不能从游戏使用Steam Input输入就断言
+全部波形经Steam Input/Remote Play传输。固定November DLL本次字符串检索
+仅找到SetDualSenseTriggerEffect相关类型，没有找到专用音频转发字符串；
+该负面检索不是不存在音频通道的证明。产品仍遵守主机仅Steam与游戏的约束。
