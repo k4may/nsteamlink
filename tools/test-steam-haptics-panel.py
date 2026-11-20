@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wine-prefix", type=Path, required=True)
+    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -34,7 +35,7 @@ def main():
                               ("panel-ui-test.exe", ["-DNSL_PANEL_TEST=1"])):
         subprocess.run(flags + definitions + ["-municode", "-mwindows",
             str(ROOT / "tools/steam-haptics-panel-win.c"), "-o", str(out / name),
-            "-lcomctl32", "-lshell32", "-ladvapi32", "-lws2_32", "-lgdi32"], check=True)
+            "-lcomctl32", "-lshell32", "-ladvapi32", "-lws2_32", "-lgdi32", "-lbcrypt"], check=True)
     subprocess.run(["gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                     str(ROOT / "app/tests/test_haptics_panel_state.c"), "-o", str(out / "state-test")], check=True)
     subprocess.run([str(out / "state-test")], check=True)
@@ -74,12 +75,15 @@ def main():
     thread.start()
     report = []
     try:
-        for case in ("close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency"):
+        for case in args.cases:
             case_env=dict(environment, NSL_PANEL_CASE=case)
             if case=="init_retry":case_env["NSL_PANEL_INIT_FAIL_ONCE"]="1"
             if case=="user_retry":case_env["NSL_PANEL_USER_FAIL_ONCE"]="1"
-            run = subprocess.run(["wine", str(out / "panel-ui-test.exe"), "--steam-root",
-                "Z:" + str(mock).replace("/", "\\")],
+            command=["wine", str(out / "panel-ui-test.exe"), "--steam-root", "Z:" + str(mock).replace("/", "\\")]
+            if case.startswith("desktop"):
+                command.append("--desktop")
+                case_env.update(SteamAppId="3586707621",SteamGameId="15404791932542517248")
+            run = subprocess.run(command,
                 env=case_env, capture_output=True, timeout=45)
             (out / f"{case}.stderr").write_bytes(run.stderr)
             if run.returncode:

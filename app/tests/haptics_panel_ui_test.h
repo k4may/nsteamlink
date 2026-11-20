@@ -20,6 +20,20 @@ static void panel_self_test(void) {
     mock_read_fn sr=(mock_read_fn)(uintptr_t)GetProcAddress(smodule,"NslMockRead");
     mock_set_fn xs=(mock_set_fn)(uintptr_t)GetProcAddress(xmodule,"NslMockSet");
     mock_set_fn ss=(mock_set_fn)(uintptr_t)GetProcAddress(smodule,"NslMockSet");
+    if(!wcsncmp(scenario,L"desktop",7)) {
+        assert(desktop_mode && desktop_ready && steam_user && target_count==1 && chosen.route==2);
+        stop_capture();levels(789,23456);click(ID_PLAY);tick();assert(sr(0)==789 && sr(1)==23456);
+        if(!wcscmp(scenario,L"desktop_app_change")) {
+            ss(4,413080);state.last_send_ms=0;tick();assert(sr(0)==789);
+        } else if(!wcscmp(scenario,L"desktop_disconnect")) {
+            ss(0,0);last_scan=0;tick();assert(!state.active && !target_count);
+            ss(0,1);last_scan=0;tick();assert(target_count==1 && !state.active);
+        } else if(!wcscmp(scenario,L"desktop_handle_change")) {
+            ss(2,0x9999);last_scan=0;tick();assert(!state.active && target_count==1 && chosen.id==0x9999);
+        } else assert(!wcscmp(scenario,L"desktop"));
+        click(ID_STOP);assert(!sr(0) && !sr(1));
+        log_event("\"stage\":\"ui_test_passed\"");PostMessageW(window,WM_CLOSE,0,0);return;
+    }
     assert(xr && sr && xs && ss && target_count==1 && !state.active);
     stop_capture();
     SendMessageW(window,WM_ACTIVATE,WA_ACTIVE,0);

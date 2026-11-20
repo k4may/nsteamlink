@@ -1,10 +1,10 @@
-/* Live Windows game-source panel. Launch as a Steam non-Steam game.
- * XInput is the ordinary game's path; public SteamInput006 is selectable.
- * No private RPC, fake AppID, driver, injected packet, or Valve DLL is shipped.
+/* Live Windows haptics panel. Desktop mode uses the installed Steam client RPC.
+ * XInput and public Steam Input remain separate game-source comparisons.
+ * No driver, injected Remote Play packet or Valve DLL is shipped.
  * Native ABI order: Valve Proton steamworks_sdk_163 isteamclient/isteaminput.h.
  * Build: x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror
  * -municode -mwindows tools/steam-haptics-panel-win.c -o steam-haptics-panel.exe
- * -lcomctl32 -lshell32 -ladvapi32 -lws2_32 -lgdi32
+ * -lcomctl32 -lshell32 -ladvapi32 -lws2_32 -lgdi32 -lbcrypt
  */
 #define WIN32_LEAN_AND_MEAN
 #ifndef UNICODE
@@ -17,6 +17,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <commctrl.h>
+#include <bcrypt.h>
 #include <shellapi.h>
 #include <xinput.h>
 #include <stdbool.h>
@@ -63,6 +64,15 @@ static HMODULE xmodule, smodule;
 static get_state_fn xget;
 static set_state_fn xset;
 static void *client, *input;
+static bool desktop_mode, desktop_ready;
+static void *desktop_controller, *desktop_map;
+static uintptr_t desktop_base;
+static char desktop_sha[65];
+typedef void *(*desktop_factory_fn)(int, int);
+typedef void *(*desktop_destroy_fn)(void *, unsigned);
+typedef bool (*desktop_details_fn)(void *, unsigned, unsigned char *);
+typedef void (*desktop_rumble_fn)(void *, uint32_t, unsigned, uint16_t, uint16_t);
+static const char *route_name(unsigned r) { return r==2?"steam_desktop_rpc":r==1?"steaminput":"xinput"; }
 static int steam_pipe, steam_user;
 static unsigned steam_init_step;
 static bool input_initialized, controls_changing, winsock_ready;
@@ -131,6 +141,84 @@ static void levels(uint16_t low, uint16_t high) {
     swprintf(text,48,L"B %.1f%%",100.0*high/65535); SetWindowTextW(high_label,text);
     controls_changing = false;
 }
+static bool file_sha256(const wchar_t *path, char hex[65]) {
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+    BCRYPT_ALG_HANDLE algorithm = NULL;
+    BCRYPT_HASH_HANDLE hash = NULL;
+    PUCHAR object = NULL;
+    DWORD object_size = 0, bytes = 0;
+    unsigned char digest[32], buffer[4096];
+    bool good = false;
+    if (file == INVALID_HANDLE_VALUE) return false;
+    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) < 0 ||
+        BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&object_size,
+                          sizeof(object_size), &bytes, 0) < 0) goto done;
+    object = malloc(object_size);
+    if (!object || BCryptCreateHash(algorithm, &hash, object, object_size, NULL, 0, 0) < 0) goto done;
+    for (;;) {
+        if (!ReadFile(file, buffer, sizeof(buffer), &bytes, NULL)) goto done;
+        if (!bytes) break;
+        if (BCryptHashData(hash, buffer, bytes, 0) < 0) goto done;
+    }
+    if (BCryptFinishHash(hash, digest, sizeof(digest), 0) < 0) goto done;
+    for (unsigned i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", digest[i]);
+    good = true;
+done:
+    if (hash) BCryptDestroyHash(hash);
+    free(object);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+    CloseHandle(file);
+    return good;
+}
+static void desktop_close(void) {
+    desktop_ready=false;desktop_controller=NULL;
+    if(desktop_map) METHOD(desktop_map,0,desktop_destroy_fn)(desktop_map,1);
+    desktop_map=NULL;
+}
+static bool desktop_open(const wchar_t *path) {
+    desktop_close();
+#ifdef NSL_PANEL_TEST
+    typedef void *(*mock_open_fn)(void **);
+    mock_open_fn mock=(mock_open_fn)(uintptr_t)GetProcAddress(smodule,"NslMockDesktop");
+    if(mock) {desktop_map=mock(&desktop_controller);desktop_ready=desktop_map!=NULL;return desktop_ready;}
+#endif
+    if(!file_sha256(path,desktop_sha)) return false;
+    log_event("\"stage\":\"desktop_binary\",\"sha256\":\"%s\"",desktop_sha);
+    if(strcmp(desktop_sha,"669fa08e259277fbf5a1dfe15ce88afe734e89151194304b44d92f418dcc985b")) return false;
+    desktop_base=(uintptr_t)smodule;
+    if((uintptr_t)*(void ***)input!=desktop_base+0x133f1e0) return false;
+    desktop_controller=*(void **)((unsigned char *)input+8);
+    if(!desktop_controller || (uintptr_t)*(void ***)desktop_controller!=desktop_base+0x1304dc0) return false;
+    desktop_map=((desktop_factory_fn)(desktop_base+0x76d560))(0,steam_user);
+    if(!desktop_map) return false;
+    if((uintptr_t)*(void ***)desktop_map!=desktop_base+0x1369980 ||
+       (uintptr_t)METHOD(desktop_map,0,desktop_destroy_fn)!=desktop_base+0x7483d0) {
+        /* A pinned factory owns its object even if this layout check fails. */
+        ((desktop_destroy_fn)(desktop_base+0x7483d0))(desktop_map,1);desktop_map=NULL;return false;
+    }
+    if((uintptr_t)METHOD(desktop_map,0x338,desktop_details_fn)!=desktop_base+0x77e0b0 ||
+       (uintptr_t)METHOD(desktop_map,0x2b8,desktop_rumble_fn)!=desktop_base+0x8b7240) {desktop_close();return false;}
+    desktop_ready=true;return true;
+}
+static bool desktop_details(unsigned index,uint64_t *handle,uint32_t *type) {
+    unsigned char info[88]={0};
+    if(!desktop_ready || index>=16 || !METHOD(desktop_map,0x338,desktop_details_fn)(desktop_map,index,info) || !info[0x40]) return false;
+    memcpy(handle,info+0x20,8);memcpy(type,info+0x34,4);
+    return *handle!=0;
+}
+static bool desktop_send(uint64_t handle,uint16_t low,uint16_t high) {
+    for(unsigned index=0;index<16;++index) {
+        uint64_t actual=0;uint32_t type=0;
+        if(!desktop_details(index,&actual,&type) || actual!=handle || type!=38) continue;
+        uint32_t active;memcpy(&active,(unsigned char *)desktop_controller+0x109608,4);
+        METHOD(desktop_map,0x2b8,desktop_rumble_fn)(desktop_map,active,index,low,high);
+        log_event("\"stage\":\"desktop_dispatch\",\"handle\":%llu,\"index\":%u,\"active_appid\":%lu,\"active_appid_source\":\"steam_client_cache\",\"low\":%u,\"high\":%u,\"delivery_verified\":false",
+                  (unsigned long long)handle,index,(unsigned long)active,low,high);
+        return true;
+    }
+    return false;
+}
 static bool send_levels(target t, uint16_t low, uint16_t high, const char *reason) {
     DWORD rc = ERROR_DEVICE_NOT_CONNECTED;
     if (!t.route && xset && t.id < 4) {
@@ -138,9 +226,10 @@ static bool send_levels(target t, uint16_t low, uint16_t high, const char *reaso
     } else if (t.route == 1 && input_initialized && t.id) {
         METHOD(input, 0xf0, rumble_fn)(input, t.id, low, high); rc = 0;
     }
+    if(t.route==2 && desktop_send(t.id,low,high)) rc=0;
     log_event("\"stage\":\"request\",\"sequence\":%llu,\"route\":\"%s\",\"target\":%llu,"
         "\"low\":%u,\"high\":%u,\"rc\":%lu,\"reason\":\"%s\",\"delivery_verified\":false",
-        (unsigned long long)++request_sequence, t.route ? "steaminput" : "xinput",
+        (unsigned long long)++request_sequence, route_name(t.route),
         (unsigned long long)t.id, low, high, (unsigned long)rc, reason);
     return rc == ERROR_SUCCESS;
 }
@@ -153,6 +242,7 @@ static void stop_output(const char *reason) {
 }
 static void steam_open(void) {
     if(input_initialized) return;
+    desktop_close();
     /* A launch-time connection failure is not permanent. Release any partial
      * pipe/user before an explicit retry; keep the loaded DLL reference. */
     if(steam_user && client) METHOD(client,0x20,release_user_fn)(client,steam_pipe,steam_user);
@@ -178,24 +268,31 @@ static void steam_open(void) {
     if (!steam_pipe || !(steam_user = METHOD(client, 0x10, user_fn)(client, steam_pipe))) return;
     steam_init_step=6;input = METHOD(client, 0x60, interface_fn)(client, steam_user, steam_pipe, "SteamInput006");
     if (input) {steam_init_step=7;input_initialized = METHOD(input, 0, init_fn)(input, true);}
-    if(input_initialized) steam_init_step=0;
+    if(input_initialized) {steam_init_step=0;if(desktop_mode) desktop_open(path);}
 }
 static void steam_log_initialization(void) {
-    wchar_t appid[32]={0};GetEnvironmentVariableW(L"SteamAppId",appid,32);
+    wchar_t appid[32]={0},gameid[32]={0};GetEnvironmentVariableW(L"SteamAppId",appid,32);GetEnvironmentVariableW(L"SteamGameId",gameid,32);
     log_event("\"stage\":\"steam_input_init\",\"ready\":%s,\"failure_step\":%u,\"pipe\":%d,\"user\":%d,\"appid\":%llu,\"gameid\":%llu,\"pid\":%lu",
         input_initialized?"true":"false",steam_init_step,steam_pipe,steam_user,
-        (unsigned long long)wcstoull(appid,NULL,10),(unsigned long long)wcstoull(steam_context,NULL,10),
+        (unsigned long long)wcstoull(appid,NULL,10),(unsigned long long)wcstoull(gameid,NULL,10),
         (unsigned long)GetCurrentProcessId());
+    if(desktop_mode) log_event("\"stage\":\"desktop_init\",\"ready\":%s,\"inherited_gameid\":%llu",desktop_ready?"true":"false",(unsigned long long)wcstoull(steam_context,NULL,10));
 }
 static void scan_targets(bool force) {
     target found[16]; unsigned count = 0;
     unsigned route = (unsigned)SendMessageW(route_box, CB_GETCURSEL, 0, 0);
-    if(force && route==1 && !input_initialized) {steam_open();steam_log_initialization();}
+    if(force && route>0 && !input_initialized) {steam_open();steam_log_initialization();}
     if (!route && xget) {
         for (DWORD i = 0; i < 4; ++i) {
             XINPUT_STATE value;
             if (xget(i, &value) == ERROR_SUCCESS) found[count++] = (target){i, 0};
         }
+    } else if(route==2 && desktop_ready) {
+        for(unsigned i=0;i<16;++i) {
+            uint64_t id=0;uint32_t type=0;
+            if(desktop_details(i,&id,&type) && type==38) found[count++]=(target){id,2};
+        }
+        if(force || count!=target_count) log_event("\"stage\":\"desktop_enumeration\",\"count\":%u",count);
     } else if (route == 1 && input_initialized) {
         uint64_t handles[16] = {0};
         int n = METHOD(input, 0x30, controllers_fn)(input, handles);
@@ -236,7 +333,9 @@ static void scan_targets(bool force) {
             swprintf(text,128,L"游戏手柄 %llu (XInput)%ls",(unsigned long long)found[i].id+1,remote?L" / 远程":L"");
             if(!still_connected && remote) select=i;
         }
-        else {
+        else if(found[i].route==2) {
+            swprintf(text,128,L"Switch Pro / Steam桌面 / %016llx",(unsigned long long)found[i].id);
+        } else {
             int type = METHOD(input, 0x128, type_fn)(input, found[i].id);
             uint32_t remote = METHOD(input, 0x168, remote_fn)(input, found[i].id);
             swprintf(text, 128, L"%ls / 类型 %d / %016llx", remote ? L"远程手柄" : L"本地手柄",
@@ -246,15 +345,17 @@ static void scan_targets(bool force) {
         if (found[i].id == old.id && found[i].route == old.route && still_connected) select = i;
         SendMessageW(target_box, CB_ADDSTRING, 0, (LPARAM)text);
     }
-    if (count) { chosen = found[select]; SendMessageW(target_box, CB_SETCURSEL, select, 0); }
-    else if(route==1 && !input_initialized) {
+    if (count) { chosen = found[select]; SendMessageW(target_box, CB_SETCURSEL, select, 0);
+        if(route==2) set_status(L"桌面直连已找到 Switch Pro，可以播放；实际收包见下方回传。"); }
+    else if(route>0 && !input_initialized) {
         const wchar_t *reasons[]={L"未就绪",L"未找到Steam安装路径",L"Steam路径无效",L"加载Steam客户端DLL失败",
             L"Steam客户端接口未返回",L"连接Steam用户失败",L"Steam Input接口未返回",L"Steam Input初始化失败"};
         set_status(L"%ls；具体状态已记录。",reasons[steam_init_step<=7?steam_init_step:0]);
     }
+    else if(route==2) set_status(desktop_ready?L"Steam全局列表暂无Switch Pro；请连接Switch正常客户端。":L"桌面接口不可用：请查看记录中的初始化阶段或Steam DLL版本。");
     else if(route==1) set_status(L"Steam Input公开列表及XInput关联查询都为空；已记录具体枚举结果。");
     else set_status(L"未发现手柄：请连接 Switch，再从 Steam 库启动本工具。可切换发送方式检查。");
-    log_event("\"stage\":\"controllers\",\"route\":\"%s\",\"count\":%u", route ? "steaminput" : "xinput", count);
+    log_event("\"stage\":\"controllers\",\"route\":\"%s\",\"count\":%u", route_name(route), count);
 }
 static void start_output(void) {
     unsigned on, off, limit, low, high;
@@ -265,7 +366,7 @@ static void start_output(void) {
         !number(limit_edit, 0, UINT32_MAX, &limit)) {
         set_status(L"时间需为整数；震动时间至少1ms，间隔可为0，上限为0表示不限。"); return;
     }
-    if(!input_initialized && SendMessageW(route_box,CB_GETCURSEL,0,0)==1) scan_targets(true);
+    if(!input_initialized && SendMessageW(route_box,CB_GETCURSEL,0,0)>0) scan_targets(true);
     if (!target_count) { set_status(L"没有可用手柄。初始化和枚举结果已记录，可再次点击播放重试连接。"); return; }
     stop_output("restart");
     state.low=(uint16_t)low; state.high=(uint16_t)high;
@@ -478,8 +579,9 @@ static void create_controls(void) {
     label(L"发送方式",20,52,90);
     route_box=control(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,110,48,230,130,ID_ROUTE);
     SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"普通游戏路径 (XInput)");
-    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam Input 双路震动");
-    SendMessageW(route_box,CB_SETCURSEL,0,0);
+    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam Input 公开API（游戏对照）");
+    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam 桌面直连（无需添加游戏）");
+    SendMessageW(route_box,CB_SETCURSEL,desktop_mode?2:0,0);
     target_box=control(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,350,48,355,160,ID_TARGET);
     low_label=control(L"STATIC",L"低频通道",0,20,100,105,25,0);
     low_slider=control(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,115,88,445,46,ID_LOW);
@@ -630,6 +732,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE previous,PWSTR cmd,int show) {
     instance=inst; origin_ms=now_ms(); InitializeCriticalSection(&data_lock);
     int argc; LPWSTR *argv=CommandLineToArgvW(GetCommandLineW(),&argc);
     for(int i=1;argv && i<argc;++i) {
+        if(!wcscmp(argv[i],L"--desktop")) desktop_mode=true;
         if(!wcscmp(argv[i],L"--steam-root") && i+1<argc && wcslen(argv[i+1])<MAX_PATH) wcscpy(root_override,argv[++i]);
     }
     if(argv) LocalFree(argv);
@@ -637,6 +740,12 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE previous,PWSTR cmd,int show) {
     /* Preserve Steam's actual non-Steam-game context; never invent an AppID. */
     GetEnvironmentVariableW(L"SteamGameId",steam_context,96);
     log_event("\"stage\":\"begin\",\"launched_with_steam_context\":%s,\"physical_fidelity_verified\":false",steam_context[0]?"true":"false");
+    if(!steam_context[0] && !root_override[0]) desktop_mode=true;
+    if(desktop_mode) {
+        /* This process only. Zero is the client's no-app context, not a borrowed game. */
+        SetEnvironmentVariableW(L"SteamAppId",L"0");SetEnvironmentVariableW(L"SteamGameId",L"0");
+    }
+    log_event("\"stage\":\"startup_mode\",\"desktop\":%s",desktop_mode?"true":"false");
     steam_open();
     steam_log_initialization();
 #ifdef NSL_PANEL_TEST
@@ -670,6 +779,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE previous,PWSTR cmd,int show) {
         }
     }
     stop_output("exit"); stop_capture();
+    desktop_close();
     if(input_initialized) METHOD(input,8,shutdown_fn)(input);
     if(steam_user) METHOD(client,0x20,release_user_fn)(client,steam_pipe,steam_user);
     if(steam_pipe) METHOD(client,8,release_pipe_fn)(client,steam_pipe);

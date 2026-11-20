@@ -2514,3 +2514,24 @@ remote session 分别为 3、4、5。这是实际 Steam 的内部只读查询结
 属于内部接口路线，不能包装成任意游戏公开 API 成功；普通游戏的 XInput
 兼容测试在 Windows 仍依赖 Steam 的进程接管，不能据桌面 Profile 存在就
 删除其启动条件。游戏 API 验证、Steam 内部诊断和桌面输入绑定须分别标明。
+
+### 22.26 桌面直连面板的验证入口
+
+`Start-Desktop-Panel.cmd` 启动面板 `--desktop` 并在退出后自动打包记录。
+该模式只将本进程 SteamAppId/SteamGameId 设为 0，使用已安装 Steam 的
+全局用户连接；不修改 Steam 配置或 Switch 上报，不依赖快捷方式的游戏身份。
+固定 §22.11 DLL 的 owned controller map `+0x338` 查询 88B 设备详情，
+按有效 Switch Pro handle 枚举并在每次发送前重新匹配 index；map `+0x2b8`
+以 `(activeAppID,index,low,high)` 调用 Steam 的 `TriggerVibration` RPC。
+activeAppID 取同版本 client cache `+0x109608`，其原始 getter 为
+`0x13861c4f0`，日志标明缓存来源；Steam 仍自行检查真实活动配置，不能把
+缓存读回或调用返回当成交付成功。map 在 Input shutdown/user/pipe 释放前销毁。
+
+`rpc_bridge_evidence` 执行原始 `0x1388b7240`，验证 appID=769、index=4、
+A=0x1234/B=0xabcd 的序列化，方法 ID 为 0xbba86a5a；其 buffer/IPC/reply
+为替身。Win32 桌面用例覆盖进程身份归零、配置变化、断线、handle 变化及
+停止/清理，并保留公开 API、失败重试和实时频率相关回归。真实 Steam 的
+零应用连接、当前缓存到 worker 的匹配和最终输出需看实际运行的
+`desktop_init`、`desktop_enumeration`、`desktop_dispatch` 及设备回传；
+离线检查不代替这些证据。频率仍是 Switch 普通映射配置，A/B 请求经 Steam
+Remote Play 发送，桌面内部诊断不改称普通游戏公开 API 验收。

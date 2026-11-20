@@ -350,6 +350,15 @@ def rpc_bridge_evidence(pe):
     assert bytes(wire) == expected, wire.hex()
     assert acknowledged == [reply]
     pulse_wire = wire.hex()
+    wire.clear()
+    m.allowed += [(0x1388b7240, 0x1388b73f0)]
+    m.write(0x4f0008 + 0x28, 0xabcd, 2)
+    m.run(0x1388b7240, obj, 769, 4, 0x1234)
+    expected = bytes([1, 0x29]) + rumble.struct.pack('<IIIIHHI',
+        0, 0xbba86a5a, 769, 4, 0x1234, 0xabcd, 0xc0e11ce8)
+    assert bytes(wire) == expected, wire.hex()
+    assert acknowledged == [reply, reply]
+    rumble_wire = wire.hex()
     parent, table = m.alloc(), m.alloc()
     m.write(parent, table)
     m.write(table + 0x50, 0x480070)
@@ -390,7 +399,7 @@ def rpc_bridge_evidence(pe):
     assert m.reg('rax') & 255 == 1 and reads == [1, 88]
     assert bytes(m.u.mem_read(output, 88)) == bytes(supplied)
     assert bytes(wire) == bytes([1, 0x29]) + rumble.struct.pack('<IIII', 0, 0xc3fe8503, index, 0xc93f17b1)
-    assert acknowledged == [reply, reply]
+    assert acknowledged == [reply, reply, reply]
     details_wire = wire.hex()
     m.u.mem_write(details + 0xfe8 + index * 88, bytes(supplied))
     m.allowed += [(0x138619090, 0x13861912b)]
@@ -400,7 +409,7 @@ def rpc_bridge_evidence(pe):
     m.run(0x1387483d0, obj, 1)
     assert freed == [(obj, 32)]
     return dict(passed=True, factory_pipe=0, factory_user=11,
-                vtable_rva='1369980', pulse_rpc_wire=pulse_wire, details_rpc_wire=details_wire,
+                vtable_rva='1369980', pulse_rpc_wire=pulse_wire, rumble_rpc_wire=rumble_wire, details_rpc_wire=details_wire,
                 server_arguments=forwarded[0][1:], details_bytes=88,
                 owned_map_freed=True, actual_steam_ipc_verified=False)
 

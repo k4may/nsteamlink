@@ -10,6 +10,10 @@
 typedef struct object { void **vtable; } object;
 static void *client_slots[13], *input_slots[46];
 static object client={client_slots},input={input_slots};
+static void *desktop_slots[104];
+static object desktop={desktop_slots};
+static unsigned char desktop_cache[0x10960c];
+static bool desktop_opened;
 static uint64_t handle=0x123456789;
 static unsigned low,high,calls,mask=1,empty,type=10,shutdown_count;
 static bool initialized,shutdown_done,released;
@@ -24,6 +28,7 @@ __declspec(dllexport) void NslMockSet(unsigned which,uint64_t n) {
     else if(which==1) empty=(unsigned)n;
     else if(which==2) handle=n;
     else if(which==3) type=(unsigned)n;
+    else if(which==4) {uint32_t appid=(uint32_t)n;memcpy(desktop_cache+0x109608,&appid,4);}
 }
 __declspec(dllexport) DWORD WINAPI XInputGetState(DWORD index,XINPUT_STATE *value) {
     memset(value,0,sizeof(*value));
@@ -63,8 +68,28 @@ static void input_rumble(void *self,uint64_t id,uint16_t a,uint16_t b) {
 static int input_type(void *self,uint64_t id) { assert(self==&input && id==handle);return (int)type; }
 static uint32_t input_remote(void *self,uint64_t id) { assert(self==&input && id==handle);return 1; }
 static uint64_t index_handle(void *self,int index) { assert(self==&input);return index==0?handle:0; }
+static void *desktop_destroy(void *self,unsigned flags) {
+    assert(self==&desktop && flags==1 && desktop_opened && !low && !high);desktop_opened=false;return NULL;
+}
+static bool desktop_details_mock(void *self,unsigned index,unsigned char *out) {
+    assert(self==&desktop && desktop_opened);
+    if(index!=0 || !mask) return false;
+    memset(out,0,88);memcpy(out+0x20,&handle,8);uint32_t device_type=38;memcpy(out+0x34,&device_type,4);out[0x40]=1;return true;
+}
+static void desktop_rumble_mock(void *self,uint32_t appid,unsigned index,uint16_t a,uint16_t b) {
+    uint32_t active;memcpy(&active,desktop_cache+0x109608,4);
+    assert(self==&desktop && desktop_opened && index==0 && appid==active);
+    low=a;high=b;++calls;
+}
+__declspec(dllexport) void *NslMockDesktop(void **controller) {
+    char env[32];GetEnvironmentVariableA("SteamAppId",env,32);assert(!strcmp(env,"0"));
+    GetEnvironmentVariableA("SteamGameId",env,32);assert(!strcmp(env,"0"));
+    uint32_t appid=769;memcpy(desktop_cache+0x109608,&appid,4);*controller=desktop_cache;
+    desktop_slots[0]=desktop_destroy;desktop_slots[0x338/8]=desktop_details_mock;desktop_slots[0x2b8/8]=desktop_rumble_mock;
+    desktop_opened=true;return &desktop;
+}
 static bool input_shutdown(void *self) {
-    assert(self==&input && initialized && !shutdown_done && !low && !high);
+    assert(self==&input && initialized && !shutdown_done && !low && !high && !desktop_opened);
     shutdown_done=true;++shutdown_count;return true;
 }
 static void user_release(void *self,int pipe,int user) {

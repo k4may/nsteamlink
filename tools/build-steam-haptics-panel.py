@@ -10,7 +10,17 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 README = """NSteamLink · Steam 力度 / Switch 频率实时控制面板
 
-升级已有面板
+桌面直连（这次验证用）
+保持Steam运行、Switch正常客户端连接Steam。解压后双击Start-Desktop-Panel.cmd，
+无需添加非Steam游戏。默认选择“Steam 桌面直连”，找到Switch Pro后调A/B并点播放。
+频率和输出位置继续在同一面板调节，Switch无需更新。
+点停止归零，关闭面板后本文件夹自动生成desktop-results-日期.zip，包含本次日志及Steam错误。
+桌面直连使用Steam自身的内部IPC，请求仍由Steam经Remote Play发给Switch。
+它是诊断路径，不宣称代表普通游戏公开Steam Input API已成功。
+当前适配的是此前提供的Steam DLL版本；版本不匹配会记录实际SHA，不猜接口。
+
+
+原有XInput游戏路径
 关闭旧面板，用本包同名EXE替换原文件夹中的EXE，继续用原来的Steam快捷方式。
 首次使用：Steam左下“添加游戏”→“添加非Steam游戏”选择EXE。
 Switch使用正常客户端连接Steam，再从Steam库启动面板。
@@ -33,11 +43,12 @@ Nintendo原生效果与专用源按原参数解释，不套用普通映射的频
 支持实时配置的正常客户端需更新一次，此后改变数值不需重编或重新推送。
 
 Steam Input枚举
-默认XInput普通游戏路径，可切换Steam Input双路震动。
+桌面启动默认走桌面直连；从Steam库启动则保留XInput普通游戏路径和公开API对照。
 公开列表为空时，会继续用Steam公开接口查询XInput槽对应的真实Steam句柄。
 初始化阶段、公开列表数、关联句柄数及请求均自动写入记录。
 启动连接失败后，切换Steam Input或点击播放会重试；不再永久沿用首次失败状态。
-不借用其他游戏AppID，不安装驱动，不用私有RPC，不改Steam设备能力或布局。
+不借用其他游戏AppID，不安装驱动，不改Steam设备能力或布局。
+公开API对照不走内部IPC；桌面直连明确使用版本绑定的Steam内部IPC。
 
 使用与记录
 力度支持滑块、精确0–65535值及快捷设置；支持持续、单次、重复脉冲。
@@ -58,23 +69,27 @@ def main():
     exe = out / "steam-haptics-panel.exe"
     command = ["x86_64-w64-mingw32-gcc", "-std=c11", "-O2", "-s", "-Wall", "-Wextra", "-Werror",
         "-municode", "-mwindows", str(ROOT / "tools/steam-haptics-panel-win.c"), "-o", str(exe),
-        "-lcomctl32", "-lshell32", "-ladvapi32", "-lws2_32", "-lgdi32"]
+        "-lcomctl32", "-lshell32", "-ladvapi32", "-lws2_32", "-lgdi32", "-lbcrypt"]
     subprocess.run(command, check=True)
     (out / "使用说明.txt").write_text(README, encoding="utf-8-sig")
     imports = subprocess.check_output(["x86_64-w64-mingw32-objdump", "-p", str(exe)], text=True)
     dlls = [line.split("DLL Name:", 1)[1].strip() for line in imports.splitlines() if "DLL Name:" in line]
     assert set(d.lower() for d in dlls) <= {"advapi32.dll", "comctl32.dll", "gdi32.dll", "kernel32.dll",
-        "msvcrt.dll", "shell32.dll", "user32.dll", "ws2_32.dll"}, dlls
+        "msvcrt.dll", "shell32.dll", "user32.dll", "ws2_32.dll", "bcrypt.dll"}, dlls
+    launcher=out / "Start-Desktop-Panel.cmd"
+    launcher.write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-desktop-panel.ps1"\r\n')
+    collector=out / "run-desktop-panel.ps1"
+    collector.write_text((ROOT / "tools/run-desktop-panel.ps1").read_text(),encoding="utf-8-sig")
     manifest = dict(schema=1, system_imports=dlls, compiler_command=command,
         source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (exe, out / "使用说明.txt")},
+        files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (exe, out / "使用说明.txt", launcher, collector)},
         sources={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h")},
+                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h", ROOT / "tools/run-desktop-panel.ps1")},
         actual_steam_verified=False, physical_fidelity_verified=False)
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     archive = out.parent / "NSteamLink-Steam-Haptics-Panel-Windows-x64.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in (exe.name, "使用说明.txt", "manifest.json"):
+        for name in (exe.name, "使用说明.txt", "manifest.json", launcher.name, collector.name):
             z.write(out / name, name)
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None
