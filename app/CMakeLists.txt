@@ -1506,6 +1506,18 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_test(NAME nsl-feedback-probe-host COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/tools/check-feedback-matrix.py" --probe $<TARGET_FILE:nsl-feedback-probe-host>)
     set_tests_properties(nsl-feedback-probe-host PROPERTIES TIMEOUT 15)
+    add_executable(nsl-haptics-experience-host tests/test_haptics_probe_host.c
+        platforms/switch/rumble.c ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-haptics-experience-host PRIVATE src tests/fakes
+        ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
+    target_compile_definitions(nsl-haptics-experience-host PRIVATE NSL_RUMBLE_TEST=1
+        NSL_HAPTICS_PROBE_HOST=1 NSL_FEEDBACK_MATRIX=1 NSL_HAPTICS_DEMO=1 NSL_DIAGNOSTICS=1)
+    target_compile_options(nsl-haptics-experience-host PRIVATE -Wall -Wextra -Wno-unknown-pragmas -UNDEBUG)
+    target_link_libraries(nsl-haptics-experience-host PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads m)
+    add_test(NAME nsl-haptics-experience COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_haptic_experience.py"
+        --probe $<TARGET_FILE:nsl-haptics-experience-host>)
+    set_tests_properties(nsl-haptics-experience PROPERTIES TIMEOUT 55)
     add_test(NAME nsl-feedback-matrix-verifier COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_feedback_matrix_verifier.py")
     add_test(NAME nsl-haptics-probe-host COMMAND "${Python3_EXECUTABLE}"
@@ -1825,6 +1837,13 @@ if(NSL_PLATFORM STREQUAL "switch")
     target_link_libraries(nsl-feedback-probe PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads nx m)
     nx_generate_nacp(OUTPUT feedback_probe.nacp NAME "NSteamLink Feedback Probe" AUTHOR "NSteamLink" VERSION "1.0.0")
     nx_create_nro(nsl-feedback-probe OUTPUT nsl-feedback-probe.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/feedback_probe.nacp")
+    add_executable(nsl-haptics-experience tests/switch_haptics_probe.c platforms/switch/rumble.c ${NSL_HAPTIC_SOURCES})
+    target_include_directories(nsl-haptics-experience PRIVATE src ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)
+    target_compile_definitions(nsl-haptics-experience PRIVATE NSL_DIAGNOSTICS=1 NSL_FEEDBACK_MATRIX=1 NSL_HAPTICS_DEMO=1)
+    target_compile_options(nsl-haptics-experience PRIVATE -Wall -Wextra)
+    target_link_libraries(nsl-haptics-experience PRIVATE ihslib ihslib-hid-sdl PkgConfig::SDL2 Threads::Threads nx m)
+    nx_generate_nacp(OUTPUT haptics_experience.nacp NAME "NSteamLink Haptic Experience" AUTHOR "NSteamLink" VERSION "1.0.0")
+    nx_create_nro(nsl-haptics-experience OUTPUT nsl-haptics-experience.nro NACP "${CMAKE_CURRENT_BINARY_DIR}/haptics_experience.nacp")
 
     if(NSL_BUILD_TOOLS AND NSL_DIAGNOSTICS)
         add_executable(nsl-haptics-calibration tests/switch_haptics_calibration.c platforms/switch/rumble.c

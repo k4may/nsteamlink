@@ -107,14 +107,21 @@ static void observe(HidVibrationDeviceHandle handles[2], unsigned devices, uint6
 #ifdef NSL_FEEDBACK_MATRIX
 #include "feedback_matrix.h"
 #endif
+#ifdef NSL_HAPTICS_DEMO
+#include "haptic_experience_player.h"
+#endif
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
     bool sdl = false, ihs = false, ok = false, activated = false;
+#ifdef NSL_HAPTICS_DEMO
+    bool demo_ok = true;
+#endif
     HidVibrationDeviceHandle handles[2];
     unsigned devices = 0;
     IHS_Session *session = NULL;
     IHS_HIDProvider *provider = NULL;
+    IHS_HIDManagedDevice *device = NULL;
     if (R_FAILED(socketInitializeDefault()))
         return 1;
     log_fd = nxlinkConnectToHost(false, false);
@@ -137,6 +144,11 @@ int main(int argc, char **argv) {
 #endif
     IHS_Init();
     ihs = true;
+#if defined(NSL_HAPTICS_DEMO) && !defined(NSL_HAPTICS_PROBE_HOST)
+    consoleInit(NULL);
+    printf("NSteamLink: automatic feedback checks...\n");
+    consoleUpdate(NULL);
+#endif
     if (SDL_Init(SDL_INIT_GAMECONTROLLER) < 0)
         goto cleanup;
     sdl = true;
@@ -170,7 +182,7 @@ int main(int argc, char **argv) {
     IHS_SessionHIDAddProvider(session, provider);
     char path[48];
     snprintf(path, sizeof(path), "sdl://%d", joystick_id);
-    IHS_HIDManagedDevice *device = IHS_HIDManagerOpenDevice(session->hidManager, path);
+    device = IHS_HIDManagerOpenDevice(session->hidManager, path);
     if (!device)
         goto cleanup;
 #ifdef NSL_FEEDBACK_MATRIX
@@ -272,6 +284,10 @@ cleanup:
             r->values[0].amp_low, r->values[0].freq_low, r->values[0].amp_high, r->values[0].freq_high,
             r->values[1].amp_low, r->values[1].freq_low, r->values[1].amp_high, r->values[1].freq_high);
     }
+#ifdef NSL_HAPTICS_DEMO
+    if (ok && device && permitted)
+        demo_ok = run_haptic_experience(device, session, handles, devices);
+#endif
     if (session)
         IHS_SessionDestroy(session);
     if (provider)
@@ -282,6 +298,9 @@ cleanup:
         SDL_Quit();
     if (ihs)
         IHS_Quit();
+#if defined(NSL_HAPTICS_DEMO) && !defined(NSL_HAPTICS_PROBE_HOST)
+    consoleExit(NULL);
+#endif
     ok &= snapshot.worker_starts == 1 && snapshot.worker_joins == 1 &&
           !snapshot.worker_running && !snapshot.send_failures && !output.rejected &&
           !output.queueDropped && !snapshot.trace_overwritten;
@@ -290,5 +309,9 @@ cleanup:
     if (log_fd >= 0)
         close(log_fd);
     socketExit();
+#ifdef NSL_HAPTICS_DEMO
+    return ok && demo_ok ? 0 : 1;
+#else
     return ok ? 0 : 1;
+#endif
 }

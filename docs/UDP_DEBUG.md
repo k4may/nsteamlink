@@ -573,3 +573,37 @@ SDK规范化为9B语义命令；matrix不认证被忽略的padding。Nintendo与
 显式typed PCM本地输入，没有伪造wire。unsupported保留不可还原原因位。
 Sony 47B控制包不是触觉PCM；不能把所有0d都按Nintendo解码。旧归档验证器
 不认识新来源时应拒绝，而不是把它认证为已验证的游戏高级触觉。
+
+### 本地原生震动体验
+
+`nsl-haptics-experience.nro` 先运行上述14命令矩阵，再显示并自动播放七个
+各四秒的本地场景：普通持续震动、数值幅度渐变、80/160/320/640Hz分段、
+左右交替、40ms点击与600ms保持、双载波升调、双频组合交替。方向键上重播、
+左右切换并播放、下从头播放全部，`+`立即停止并退出；整个交互最多五分钟。
+无需Steam、游戏或SD资源。两侧定位要求两只震动器；数值幅度相同不代表
+不同频率的主观强度相同，线性数值渐变也不代表感知线性。
+第三组的80/160Hz来自低频参数、320/640Hz来自高频参数，幅度编码均为64
+（约0.25547）。此示例同时改变频率和频带，不能据此隔离频率响应或认证四档
+机械效果；要定位高频弱的原因，须另行固定频率比较两频带，并逐级比较幅度，
+同时采集活动参数读回。不得仅凭相同数值幅度就推断用户应感到同样明显。
+
+```sh
+cmake --build build/switch --target nsl-haptics-experience_nro
+nxlink -a 10.10.10.111 -r 1 -s build/switch/app/nsl-haptics-experience.nro
+ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
+```
+
+这些刺激通过真实`DeviceWrite -> SDK owner -> 原生worker -> HID IPC`路径，
+而不是绕过客户端直接调用HID。七个场景用Generic01与Nintendo10B命令
+独立构造；不模拟Sony自适应扳机，不将合成声音冒充游戏专用触觉PCM。
+前置矩阵的日志仍可由`check-feedback-matrix.py`单独检验。
+场景逐次stop/join/归零后输出`demo-scene`、`demo-stopped`、`demo-send`，
+实际播放和输入循环不写网络日志；场景之间重建worker以完整保存有界trace。
+最后的`demo-end`与原矩阵`end`都须采集，不能仅凭nxlink传输成功认证完成。
+每组join后最多100ms、间隔5ms读取停止参数，完整保留`demo-stop-readback`
+序列；不要求成功提交后第一次读取就已变成零，也不将该期限解释为机械停止
+保证。桌面终端额外模拟40ms的停止读回延迟，防止立即读回的假设漏测。
+桌面终端替身检查幅度级数、频率集合、空间分侧、点击/保持时长、升调及归零。
+体验能区分效果只证明本地输出具备相应表达能力；既不证明Steam已发送该源，
+也不能据此判断某个游戏没有支持。软件提交、系统参数读回、机械响应与用户
+主观辨别仍分别记录。

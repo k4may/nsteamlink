@@ -16,6 +16,10 @@ static bool host_reader_started;
 static int host_reader_fd;
 static pthread_mutex_t host_hid_lock = PTHREAD_MUTEX_INITIALIZER;
 static HidVibrationValue host_values[2] = {{0, 160, 0, 320}, {0, 160, 0, 320}};
+#ifdef NSL_HAPTICS_DEMO
+static HidVibrationValue host_before_stop[2];
+static uint64_t host_stop_visible_ns[2];
+#endif
 
 static void *host_read_logs(void *unused) {
     (void)unused;
@@ -62,6 +66,14 @@ Result hidSendVibrationValues(const HidVibrationDeviceHandle *h, const HidVibrat
     pthread_mutex_lock(&host_hid_lock);
     for (int i = 0; i < n; ++i) {
         assert(h[i].type_value < 2);
+#ifdef NSL_HAPTICS_DEMO
+        unsigned index = h[i].type_value;
+        if (experience_demo_active && !v[i].amp_low && !v[i].amp_high &&
+            (host_values[index].amp_low || host_values[index].amp_high)) {
+            host_before_stop[index] = host_values[index];
+            host_stop_visible_ns[index] = now_ns() + UINT64_C(40000000);
+        } else if (v[i].amp_low || v[i].amp_high) host_stop_visible_ns[index] = 0;
+#endif
         host_values[h[i].type_value] = v[i];
     }
     pthread_mutex_unlock(&host_hid_lock);
@@ -71,6 +83,10 @@ Result hidGetActualVibrationValue(HidVibrationDeviceHandle h, HidVibrationValue 
     assert(h.type_value < 2);
     pthread_mutex_lock(&host_hid_lock);
     *v = host_values[h.type_value];
+#ifdef NSL_HAPTICS_DEMO
+    if (now_ns() < host_stop_visible_ns[h.type_value])
+        *v = host_before_stop[h.type_value];
+#endif
     pthread_mutex_unlock(&host_hid_lock);
     return 0;
 }
