@@ -12,7 +12,9 @@
 typedef bool (*nsl_host_read)(void *, uint64_t, void *, size_t);
 typedef struct nsl_host_haptics_state {
     unsigned slot;
-    uint64_t parent_address, io_address;
+    uint64_t parent_address, io_address, handle;
+    uint64_t native_left_ticks, native_right_ticks, shared_ticks;
+    uint32_t native_left_word, native_right_word;
     uint64_t device_caps, config_caps;
     uint32_t appid, config_type;
     uint16_t ordinary_left, ordinary_right;
@@ -45,7 +47,8 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         uint32_t type;
         READ(abstraction + 0x98, id);
         READ(abstraction + 8, type);
-        if (id != handle || type != 38) continue;
+        /* handle=0 discovers one unique, valid Switch device in this parent. */
+        if (!id || (handle && id != handle) || type != 38) continue;
         uint8_t valid;
         READ(abstraction + 0xb8, valid);
         if (!valid) continue;
@@ -53,6 +56,12 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         if (!config) return -1;
         nsl_host_haptics_state value = {0};
         value.slot = slot;
+        value.handle = id;
+        READ(abstraction + 0x528, value.native_left_ticks);
+        READ(abstraction + 0x530, value.native_right_ticks);
+        READ(abstraction + 0x538, value.shared_ticks);
+        READ(abstraction + 0x54a, value.native_left_word);
+        READ(abstraction + 0x54e, value.native_right_word);
         READ(abstraction + 0x80, value.device_caps);
         READ(abstraction + 0x588, value.enhanced);
         READ(abstraction + 0x552, value.ordinary_left);
@@ -70,7 +79,7 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         READ(parent + slot * 0xe0 + 0x230 + 0x8c, value.haptics_preference);
         uint64_t check;
         READ(abstraction + 0x98, check);
-        if (check != handle) return -1;
+        if (check != id) return -1;
         READ(state + 0x2a0, check);
         if (check != config) return -1;
         READ(state + 0x1c0, check);

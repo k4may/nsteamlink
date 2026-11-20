@@ -59,6 +59,20 @@ int main(void) {
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 1);
     assert(s.slot == 0 && s.device_caps == 0x8b6bff && s.config_caps == 0x8b6bff);
     assert(s.appid == 769 && s.pulse_gate && s.config_pulse && s.haptics_preference && s.preference_valid);
+    put(0x300528, 1234567890123ULL, 8); put(0x300530, 2345678901234ULL, 8);
+    put(0x300538, 3456789012345ULL, 8);
+    put(0x30054a, 0xc0050000, 4); put(0x30054e, 0x40400100, 4);
+    assert(nsl_host_haptics_state_read(read_state, NULL, base, 0, &s) == 1);
+    assert(s.handle == id && s.native_left_ticks == 1234567890123ULL &&
+           s.native_right_ticks == 2345678901234ULL && s.shared_ticks == 3456789012345ULL);
+    assert(s.native_left_word == 0xc0050000 && s.native_right_word == 0x40400100);
+    /* Auto-selection must reject two valid devices, even with different IDs. */
+    put(0x2a0460, 0x310000, 8); put(0x2a0540, 0x310000, 8);
+    put(0x310000, base + 0x1318fd0, 8); put(0x310008, 38, 4);
+    put(0x310098, id + 1, 8); put(0x3100b8, 1, 1);
+    assert(nsl_host_haptics_state_read(read_state, NULL, base, 0, &s) == -1);
+    assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 1);
+    fixture();
     put(0x1801f0, 53, 1); /* Real host observation: the getter normalizes nonzero. */
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 1 && s.preference_valid == 1);
     /* Actual forwarding selects +0x190 for flag=0. The old discovery skipped

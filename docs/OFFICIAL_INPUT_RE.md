@@ -2732,3 +2732,34 @@ Taiko no Tatsujin: Drum 'n' Fun!有Switch版HD rumble说明；它们可作硬件
 全部波形经Steam Input/Remote Play传输。固定November DLL本次字符串检索
 仅找到SetDualSenseTriggerEffect相关类型，没有找到专用音频转发字符串；
 该负面检索不是不存在音频通道的证明。产品仍遵守主机仅Steam与游戏的约束。
+
+### 22.33 游戏运行时的被动取证
+
+`tools/steam-game-haptics-watch-win.c` 不初始化 Steam API、不调用控制器 IPC、
+不发送反馈或修改偏好。仅对 SHA 固定的 November `steam.exe` 模块采用 §22.16
+的只读布局，每100ms采样，记录活动 config AppID、实际 handle、普通缓存、
+开关及原生 producer 时间戳/效果字。自动选择要求同一已验证 parent 内只有一个
+有效 type38；多设备须明确提供 handle，不将有界扫描当成全进程唯一性证明。
+
+**Evidence / 字段依据：** 原始 `0x138695492/0x1386954d1` 使用并更新
+abstraction `+0x528 + side*8`；`0x1386954dc` 更新共享 `+0x538`。
+`0x138695503..0x138695521` 更新 `+0x54a + side*4` 的四字节效果字，随后
+`0x138695576` 调用底层写入。对应反汇编保存在
+`build/haptics-host-20261118/native-pulse-producer-current.txt`。
+因此单侧时间戳变化仅证明该原生 producer 执行到写入前的分支，**包括停止**；
+既不是传输成功，也不能证明某个游戏调用了哪项公开 API。共享时间戳亦被普通
+输出使用，旧非零原生字可继续留存，二者均不能单独计为新增非零原生反馈。
+首次采样、handle/AppID/IO/slot 变化和读失败后的恢复重新建立基线。
+轮询可能合并事件，观测次数不能当成精确调用数；无锁快照不保证原子性。
+
+`tools/run-game-haptics-capture.ps1` 并行读取 Switch UDP28772 的 `haptics` /
+`haptic-trace`，初次追赶的旧环形记录标记 baseline_backlog；追上后记录序号缺口。
+主机采样不等待 UDP。每轮按游戏单独导出原始 `host.jsonl`、`switch.jsonl`
+和 Steam 日志尾部；不要求向 Steam 添加测试游戏，也不更新 Switch 输出逻辑。
+
+**判据：** `app/platforms/switch/rumble.c::record_command` 保留输入原包及解析
+结果：kind1/rc0 是接受记录，source0/1/2/3 分别为普通/Nintendo/扳机/Sony控制；
+kind2/rc0 是系统提交成功。非零须从实际原包/解码样本判定，不能仅看命令计数，
+也不能把 Sony 控制包等同专用音频波形。原始游戏 API 和作者设计意图仍需独立
+证据；活动游戏与重复游戏事件提供关联，不能排除 Steam 配置反馈。诊断不可达
+或采样无变化只能记未知，不证明游戏无支持；任何软件记录不代替马达机械测量。
