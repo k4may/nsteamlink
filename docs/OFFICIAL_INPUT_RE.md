@@ -1826,8 +1826,8 @@ handle，须实际验证。`requests_complete_delivery_unverified` 只表示请�
 **Evidence：** 用户归档 `nsteamlink-haptics-probe-20261118-114208.zip` 的
 `requests.jsonl` 为 steaminput_ready → probe_requires_exactly_one_switch_pro →
 probe_failed；没有 controller 行或震动请求阶段。manifest exit_code=1，DLL
-仍为 §22.11 的 SHA。controller.txt 同时记录远程 Nintendo 设备打开、桌面
-769/Steam UI 413080 配置激活；测试工具启动时仅暖载 AppID 1049320 的配置。
+仍为 §22.11 的 SHA。controller.txt 同时记录远程 Nintendo 设备打开、Steam UI
+769/桌面 413080 配置激活（编号语义更正见 §22.25）；测试工具启动时仅暖载 AppID 1049320 的配置。
 设备侧枚举日志 caps=00836bff/nativePulse=1，采集中的成功 10B Nintendo 包
 均为静音；不能称为六次源请求或非零原生交付成功。
 
@@ -2457,3 +2457,60 @@ Valve 的 [SteamAPI 初始化文档](https://partner.steamgames.com/doc/api/stea
 输入配置匹配，换成某个有许可的 AppID、改能力位或继续重试，均不自动满足
 这些条件。真实原因应从主机连接错误和同一进程的配置关联确定，而非通过
 反复更换 Switch 固件或借用另一游戏的成功结果推断。
+
+### 22.25 桌面 Profile、无应用上下文与实际连接失败
+
+**Evidence / 新面板日志：** `session-20261120-153335-23360.jsonl` 中，
+78ms 和 4969ms 两次初始化都记录 `pipe=1,user=0,failure_step=5`，
+AppID 均为快捷方式标识 3586707621。2766ms 时 XInput 枚举到一只设备，
+没有任何 `steam_enumeration`。这将失败明确缩小到 `ConnectToGlobalUser`，
+排除了“pipe 没建成”，但仍没有真实拒绝原因文本，不能把 AppID 拒绝分支
+当成唯一已证实原因。重试未解决该真实连接问题。
+
+**Evidence / 已有真实上下文查询：** 重新检查用户提供的三份归档
+`nsteamlink-haptics-probe-20261118-{121043,123657,131828}.zip` 中
+`requests.jsonl`，三次结果一致：
+
+| 内部查询上下文 | 设备数量 |
+|---|---:|
+| 0（全局查询） | 1 |
+| 769（Steam UI） | 1 |
+| 413080（桌面配置） | 0 |
+| 1049320（旧工具应用上下文） | 0 |
+
+返回的 handle 为 `0057e2009f4e844f`，公开类型为 Switch Pro（10），
+remote session 分别为 3、4、5。这是实际 Steam 的内部只读查询结果，
+不是合成缓存测试，也不是公开 `GetConnectedControllers` 返回了该 handle。
+旧探针设置了自己的应用环境后才执行跨上下文查询，不能据此宣称无应用身份
+的独立 EXE 已连接成功。§21.2 用户确认的桌面鼠标输出则证明桌面映射链路
+确实使用过本项目的远程手柄；二者都不能证明普通或原生震动输出成功。
+
+**Correction / 编号语义：** 撤回 §22.14 原先“桌面 769 / Steam UI 413080”
+的倒置标注。413080 对应 Desktop 配置；[Valve 仓库中的原始复现报告](https://github.com/ValveSoftware/steam-for-linux/issues/13794)
+给出 `desktop_neptune.vdf` 与 413080 的实际加载日志，早期
+[桌面配置报告](https://github.com/ValveSoftware/steam-for-linux/issues/7788)也作同一标识。
+这不改变旧日志的数量，尤其不能把 769 下的 1 解释成 413080 下也为 1。
+
+**Evidence / Profile 与 API 的职责：** Valve [玩家指南](https://partner.steamgames.com/doc/features/steam_controller/getting_started_for_players?l=english)
+将 Desktop Configuration 定义为桌面导航的输入绑定，区别于 Big Picture
+与游戏配置；它不是独立程序的 SDK 初始化凭据。[SteamAPI 初始化说明](https://partner.steamgames.com/doc/api/steam_api#SteamAPI_Init)
+仍有应用身份、账户和权限上下文等条件。直接双击程序不会自动继承桌面 Profile
+对应的 API 上下文，改布局也不修复 `ConnectToGlobalUser` 返回 0。
+
+**Evidence / 全局可见不等于可输出：** 同一 DLL 的
+`0x1389a7340..0x1389a737a` 在原 AppID=0 时跳过“返回 0 且 AppID 非 0”
+的拒绝分支，§22.14 内部枚举也把 0 当全局查询；这给低层独立诊断提供候选，
+不代表官方 SDK 保证零 AppID 初始化。普通震动入队函数 `0x1386380f0`
+在 `0x138638137..0x13863813d` 比较请求 AppID 与活动 config `+0x258`，
+不相等直接返回，并没有“请求 0 就匹配所有配置”的分支。
+执行原始指令、以锁/活动配置/最终入队为替身的三项对照：活动配置=413080
+时，请求 0、769 都未到达入队，请求 413080 到达；这只证明该函数过滤语义，
+不证明真实桌面输出、API 初始化或最终震动。
+
+**Conclusion：** 把非 Steam 快捷方式当作已具备访问前提的原生 API 测试源，
+再用空列表判断 Switch 上报，是错误的诊断路径。桌面导航与 Steam 全局
+设备可见已有证据，但“旧面板直接双击便能按桌面 Profile 枚举并输出”没有
+证据。固定版本的 Steam 全局/当前配置诊断可不依赖非 Steam 快捷方式，
+属于内部接口路线，不能包装成任意游戏公开 API 成功；普通游戏的 XInput
+兼容测试在 Windows 仍依赖 Steam 的进程接管，不能据桌面 Profile 存在就
+删除其启动条件。游戏 API 验证、Steam 内部诊断和桌面输入绑定须分别标明。
