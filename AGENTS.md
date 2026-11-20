@@ -36,3 +36,10 @@
 - SDL2/Mesa work should follow the upstream/devkitPro example lifecycle unless a decision record documents why this project must diverge.
 - HID/input diagnostics can create control-channel retransmission log floods. If frames or local `+` freeze only after pressing controls, check log backpressure and main-loop drain behavior before changing protocol semantics.
 - A returned first launch is not enough for high-confidence loader lifecycle proof. Do not run or request repeated hbmenu return tests by default; only do so for lifecycle-risk changes after explaining why it matters or when a new failure points there.
+
+## Development Verification Cost
+
+- Use incremental builds and choose one verification set appropriate to the changed modules. Do not rerun passing checks without new edits, failures, or unresolved concerns. Reserve full unrelated suites for changes that actually cross those boundaries or a release.
+- A dirty checkout does not block a diagnostic device experiment. Record commit, dirty state, artifact hash and the tested patch; keep clean/tag requirements for release artifacts.
+- When only a PC diagnostic tool changes, do not rebuild or redeploy the Switch client. Make diagnostic values adjustable at runtime rather than rebuilding for each value.
+- Distinguish actual interface/protocol constraints from implementation policy. Do not reject a device parameter based solely on an undocumented convenience assumption.

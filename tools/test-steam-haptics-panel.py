@@ -48,12 +48,18 @@ def main():
     stopped = threading.Event()
 
     def serve():
+        current_profile = dict(low_hz=160, high_hz=320, peak=.5571934, routing=0)
         while not stopped.is_set():
             try:
                 data, peer = server.recvfrom(256)
             except TimeoutError:
                 continue
-            if data == b"haptics":
+            if data == b"rumble-config" or data.startswith(b"rumble-config "):
+                fields = data.decode().split()
+                if len(fields) == 5:
+                    current_profile = dict(low_hz=float(fields[1]),high_hz=float(fields[2]),peak=float(fields[3]),routing=int(fields[4]))
+                reply=json.dumps(dict(stage="rumble_config",ok=True,revision=1,**current_profile),separators=(',',':')).encode()
+            elif data == b"haptics":
                 reply = b'{"stage":"haptics","commands":1}'
             elif data == b"haptic-trace 0":
                 reply = (b'{"serial":1,"kind":1,"wire":"010040008000000000","rc":0}\n'
@@ -68,7 +74,7 @@ def main():
     thread.start()
     report = []
     try:
-        for case in ("close", "focus", "disconnect", "invalid", "steam", "pulse", "capture"):
+        for case in ("close", "focus", "disconnect", "invalid", "steam", "empty_public", "pulse", "capture", "frequency"):
             run = subprocess.run(["wine", str(out / "panel-ui-test.exe"), "--steam-root",
                 "Z:" + str(mock).replace("/", "\\")],
                 env=dict(environment, NSL_PANEL_CASE=case), capture_output=True, timeout=45)

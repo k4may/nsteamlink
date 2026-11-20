@@ -25,10 +25,11 @@ typedef struct sl_rumble_render_config {
  * perceptual calibration or a claim of optimal mechanical output. */
 sl_rumble_render_config sl_rumble_render_default_config(void);
 
-/* Policy bounds: low 41..626 Hz, high 82..1253 Hz, low < high, amplitudes
+/* Policy bounds: low 41..626 Hz, high 82..1253 Hz, amplitudes
  * 0..1, all finite. The frequency bounds follow Linux hid-nintendo's supported
  * encoder range; they are not a newly inferred HOS validation contract.
- * Reference mode uses its fixed encoder; custom values do not modify it. */
+ * Bands are independent: equal/overlapping carriers are valid. Reference mode
+ * uses its fixed encoder; custom values do not modify it. */
 bool sl_rumble_render_config_valid(const sl_rumble_render_config *config);
 
 /* Pure ordinary-rumble rendering. NULL config selects the native default.

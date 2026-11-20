@@ -93,7 +93,7 @@ static void configuration_and_rejection(void) {
     bad[2].high_hz = INFINITY;
     bad[3].low_hz = 40;
     bad[4].high_hz = 1254;
-    bad[5].low_hz = bad[5].high_hz;
+    bad[5].high_hz = 81;
     bad[6].low_max_amplitude = -0.1f;
     bad[7].high_max_amplitude = 1.01f;
     bad[8].low_max_amplitude = NAN;

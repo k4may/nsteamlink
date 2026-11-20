@@ -252,6 +252,7 @@ bool sl_rumble_init(void) {
         return false;
     pthread_mutex_lock(&lock);
     memset(&stats, 0, sizeof(stats));
+    stats.ordinary_config = sl_rumble_render_default_config();
     memset(slots, 0, sizeof(slots));
     memset(native_supported, 0, sizeof(native_supported));
     for (unsigned i = 0; i < 8; ++i)
@@ -276,6 +277,38 @@ bool sl_rumble_init(void) {
     available = stats.worker_running;
     pthread_mutex_unlock(&lock);
     return available;
+}
+bool sl_rumble_configure_ordinary(float low_hz, float high_hz, float peak, unsigned routing) {
+    sl_rumble_render_config config = sl_rumble_render_default_config();
+    config.low_hz = low_hz; config.high_hz = high_hz;
+    config.low_max_amplitude = config.high_max_amplitude = peak;
+    if (!sl_rumble_render_config_valid(&config) || routing > 3) return false;
+    pthread_mutex_lock(&lock);
+    bool ok = initialized && available && !stopping;
+    if (ok && (stats.ordinary_config.low_hz != low_hz || stats.ordinary_config.high_hz != high_hz ||
+        stats.ordinary_config.low_max_amplitude != peak || stats.ordinary_config.high_max_amplitude != peak ||
+        stats.ordinary_routing != routing)) {
+        uint64_t now = now_ns();
+        for (unsigned i = 0; i < 8; ++i) {
+            sl_hd_state decoder[2];
+            memcpy(decoder, slots[i].stream.decoder, sizeof(decoder));
+            sl_sony_state sony = slots[i].stream.sony;
+            bool desynchronized = slots[i].stream.desynchronized;
+            uint64_t wire_expiry = slots[i].stream.wire_expires_ns;
+            sl_haptic_stop(&slots[i].stream, now);
+            memcpy(slots[i].stream.decoder, decoder, sizeof(decoder));
+            slots[i].stream.sony = sony;
+            slots[i].stream.desynchronized = desynchronized;
+            slots[i].stream.wire_expires_ns = wire_expiry;
+            slots[i].stream.ordinary_config = config;
+            slots[i].stream.ordinary_routing = routing;
+        }
+        stats.ordinary_config = config; stats.ordinary_routing = routing;
+        ++stats.ordinary_config_revision;
+        pthread_cond_signal(&wake);
+    }
+    pthread_mutex_unlock(&lock);
+    return ok;
 }
 void sl_rumble_shutdown(void) {
     if (!initialized)

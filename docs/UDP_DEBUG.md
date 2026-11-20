@@ -617,9 +617,13 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 不依赖虚拟手柄驱动，不携带Valve DLL，不改变客户端设备身份/能力。
 
 两路0..65535力度可拖动或精确输入，支持持续/单次/重复脉冲；开关时间及
-播放上限可实时调整。模式/目标改变、失焦、断线、停止键、关闭会归零；重新
-连接或恢复焦点不自动恢复播放。设置保存到本地用户目录，下次启动不需重编译。
-程序从游戏层发送普通双路强度；物理Hz仍由客户端普通映射决定。
+播放上限可实时调整，0表示不限。模式/目标改变、断线、停止键、关闭会归零；
+重新连接不自动恢复播放，失焦保持用户选择的播放。设置保存到本地用户目录，
+下次启动不需重编译。
+程序从游戏层发送普通双路强度；物理Hz由客户端普通映射决定。
+面板将游戏力度A/B与Switch映射分开显示：可独立设置两个频带Hz、幅度上限，
+以及默认/双侧A+B/仅左A+B/仅右A+B。频率通过诊断命令实时配置，不伪称为
+Steam普通源已有Hz字段；力度仍始终通过Steam传输。
 
 输入Switch地址后，独立可join线程仅查询UDP28772的`haptics`及分页
 `haptic-trace`，不向设备注入震动。界面分别显示最近接收的源类型/普通原值、
@@ -630,6 +634,19 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 该非Steam程序启用Steam输入及“手柄”布局。全链路测试运行正常客户端，
 不运行独立本机体验NRO。
 
+公开Steam Input列表为空时，继续使用公开`GetControllerForGamepadIndex`
+查询实际XInput槽的关联句柄并去重；初始化失败与两个查询均为空分别报告，
+不复制XInput索引冒充Steam句柄、不改设备能力。记录包含初始化阶段、真实
+应用上下文、原生列表数量及关联补充数量。
+
+`rumble-config`查询映射；`rumble-config <low_hz> <high_hz> <peak> <routing>`
+设置并回传。low范围41..626Hz，high范围82..1253Hz，彼此独立可重叠；peak
+为0..1；routing为0默认、1双侧、2仅左、3仅右。设置原子清旧待播并归零后
+用于后续普通源，保留Nintendo wire历史和失步标记；不改原生效果参数。
+PC在收到匹配回执后恢复原力度；初始查询回执不得吞掉设置后的恢复请求。
+默认160/320Hz、peak约0.5571934、routing0；设备进程重启恢复默认，PC保留
+上次输入供手动应用。记录与回执中的频率是本地映射配置而非Steam原始字段。
+
 ```sh
 python3 tools/build-steam-haptics-panel.py --output build/haptics-panel/package
 ctest --test-dir build/desktop -R '^nsl-haptics-panel-state$' --output-on-failure
@@ -639,5 +656,6 @@ xvfb-run -a python3 tools/test-steam-haptics-panel.py \
 
 构建包只含EXE、使用说明和manifest。桌面状态测试遍历全部uint16值并覆盖
 实时修改、脉冲边界、到期归零；Wine执行真实Win32控件/窗口事件/定时器与
-UDP收集，Steam/XInput终端为不分发的测试DLL，覆盖失焦、断线、切换目标、
-无效输入、脉冲、关闭归零和配置保存。该替身不认证真实Steam或Remote Play。
+UDP收集，Steam/XInput终端为不分发的测试DLL，覆盖后台继续、断线、切换目标、
+公开空列表关联查询、无效输入、脉冲、关闭归零、配置保存与固定力度切换频率。
+该替身不认证真实Steam或Remote Play。

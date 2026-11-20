@@ -2485,6 +2485,20 @@ static void udp_poll(sl_runtime *r) {
                  (unsigned long long)s->reliableRetries,
                  (unsigned long long)s->reliableMaxAckLatencyMs);
 #ifdef __SWITCH__
+    } else if (!strcmp(cmd, "rumble-config") || !strncmp(cmd, "rumble-config ", 14)) {
+        float low = 0, high = 0, peak = 0;
+        unsigned routing = 0;
+        char trailing;
+        bool setting = cmd[13] != 0;
+        bool ok = !setting || (sscanf(cmd + 14, "%f %f %f %u %c", &low, &high, &peak, &routing, &trailing) == 4 &&
+                    sl_rumble_configure_ordinary(low, high, peak, routing));
+        sl_rumble_snapshot s;
+        sl_rumble_get_snapshot(&s);
+        snprintf(reply, sizeof(reply),
+            "{\"stage\":\"rumble_config\",\"ok\":%s,\"revision\":%llu,\"low_hz\":%.9g,\"high_hz\":%.9g,"
+            "\"peak\":%.9g,\"routing\":%u,\"steam_frequency_field\":false}",
+            ok ? "true" : "false", (unsigned long long)s.ordinary_config_revision,
+            s.ordinary_config.low_hz, s.ordinary_config.high_hz, s.ordinary_config.low_max_amplitude, s.ordinary_routing);
     } else if (!strcmp(cmd, "haptics")) {
         sl_rumble_snapshot s;
         sl_rumble_get_snapshot(&s);

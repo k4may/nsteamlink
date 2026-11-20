@@ -12,6 +12,9 @@ typedef struct sl_rumble_snapshot {
     uint32_t io_result;
     uint32_t native_capability_mask; /* Local support snapshot, not a host ACK. */
     bool worker_running;
+    sl_rumble_render_config ordinary_config;
+    unsigned ordinary_routing;
+    uint64_t ordinary_config_revision;
 } sl_rumble_snapshot;
 
 typedef struct sl_rumble_trace {
@@ -27,6 +30,9 @@ typedef struct sl_rumble_trace {
  * worker uses private HID IPC and never calls SDL or application log callbacks. */
 #if defined(__SWITCH__) || defined(NSL_RUMBLE_TEST)
 bool sl_rumble_init(void);
+/* Explicit diagnostic configuration: stops queued/current output first;
+ * changes only ordinary rendering, never Steam packets or native decoding. */
+bool sl_rumble_configure_ordinary(float low_hz, float high_hz, float peak, unsigned routing);
 void sl_rumble_shutdown(void);
 int sl_rumble_command(int32_t joystick_id, const uint8_t *command, size_t size,
                       uint64_t received_ns, void *context);

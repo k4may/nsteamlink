@@ -28,6 +28,7 @@ bool sl_haptic_valid_command(const uint8_t *b, size_t size) {
 }
 void sl_haptic_init(sl_haptic_stream *s) {
     memset(s, 0, sizeof(*s));
+    s->ordinary_config = sl_rumble_render_default_config();
     for (unsigned i = 0; i < 2; ++i) {
         sl_hd_reset(&s->decoder[i]);
         s->body[i] = s->triggers[i] = s->current.values[i] = silence();
@@ -35,9 +36,13 @@ void sl_haptic_init(sl_haptic_stream *s) {
 }
 void sl_haptic_stop(sl_haptic_stream *s, uint64_t now) {
     sl_haptic_stats stats = s->stats;
+    sl_rumble_render_config config = s->ordinary_config;
+    unsigned routing = s->ordinary_routing;
     for (unsigned i = 0; i < s->count; ++i)
         stats.superseded_samples += at(s, i)->native;
     sl_haptic_init(s);
+    s->ordinary_config = config;
+    s->ordinary_routing = routing;
     s->stats = stats;
     s->current.due_ns = now;
     s->current.sequence = stats.commands;
@@ -175,7 +180,10 @@ bool sl_haptic_command_layout(sl_haptic_stream *s, const uint8_t *b, size_t size
             .sequence = s->stats.commands + 1, .duration_ns = duration,
             .source = trigger ? SL_HAPTIC_TRIGGERS : SL_HAPTIC_BODY};
         if (!trigger) {
-            if (!sl_rumble_render(NULL, layout, low, high, f.values)) goto reject;
+            sl_rumble_layout output_layout = s->ordinary_routing == 1 ? SL_RUMBLE_LAYOUT_PRO :
+                s->ordinary_routing == 2 ? SL_RUMBLE_LAYOUT_SINGLE_LEFT :
+                s->ordinary_routing == 3 ? SL_RUMBLE_LAYOUT_SINGLE_RIGHT : layout;
+            if (!sl_rumble_render(&s->ordinary_config, output_layout, low, high, f.values)) goto reject;
             seed_ordinary(s, low, high, layout);
             s->last_body_source = SL_HAPTIC_BODY;
             s->wire_expires_ns = duration && (low || high) ? add(received, duration) : 0;

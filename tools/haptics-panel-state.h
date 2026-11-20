@@ -16,8 +16,7 @@ typedef struct nsl_panel_state {
 
 static inline bool nsl_panel_valid(const nsl_panel_state *s) {
     return s && s->mode <= NSL_PANEL_REPEAT && s->mode >= NSL_PANEL_HOLD &&
-        s->on_ms >= 20 && s->on_ms <= 60000 && s->off_ms >= 20 &&
-        s->off_ms <= 60000 && s->limit_ms >= 100 && s->limit_ms <= 600000;
+        s->on_ms >= 1;
 }
 static inline bool nsl_panel_start(nsl_panel_state *s, uint64_t now) {
     if (!nsl_panel_valid(s)) return false;
@@ -28,7 +27,7 @@ static inline void nsl_panel_stop(nsl_panel_state *s) { s->active = false; }
 static inline bool nsl_panel_next(nsl_panel_state *s, uint64_t now, uint16_t out[2]) {
     bool on = false;
     if (s->active) {
-        if (now < s->started_ms || now - s->started_ms >= s->limit_ms) s->active = false;
+        if (now < s->started_ms || (s->limit_ms && now - s->started_ms >= s->limit_ms)) s->active = false;
         else {
             uint64_t elapsed = now - s->started_ms;
             if (s->mode == NSL_PANEL_ONCE && elapsed >= s->on_ms) s->active = false;

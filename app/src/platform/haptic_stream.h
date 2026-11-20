@@ -50,6 +50,8 @@ typedef struct sl_haptic_stream {
     sl_haptic_source last_body_source;
     uint64_t pcm_epoch, pcm_available_pts;
     bool pcm_started, pcm_ended;
+    sl_rumble_render_config ordinary_config;
+    unsigned ordinary_routing; /* 0 hardware layout, 1 both, 2 left, 3 right */
     sl_haptic_stats stats;
 } sl_haptic_stream;
 

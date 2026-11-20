@@ -321,5 +321,57 @@ int main(void) {
         assert(snapshot().stream[1].stale_frames==overdue);
         sl_rumble_shutdown();
     }
-    puts("PASS native output worker, three-sample pulse, expiry, device changes, retry and join");
+    controllers=1;
+    styles[32]=HidNpadStyleTag_NpadHandheld;styles[0]=0;
+    assert(sl_rumble_init());
+    assert(!sl_rumble_configure_ordinary(NAN,640,.75f,0));
+    assert(!sl_rumble_configure_ordinary(160,640,1.01f,0));
+    assert(!sl_rumble_configure_ordinary(160,640,.75f,4));
+    for(unsigned route=0;route<4;++route) {
+        uint64_t reset_before=snapshot().sends;
+        assert(sl_rumble_configure_ordinary(160,640,.75f,route));
+        if(reset_before) await_sends(reset_before+1);
+        uint64_t before=snapshot().sends;
+        assert(rumble(32768,65535,0)==0);await_sends(before+1);
+        pthread_mutex_lock(&capture_lock);
+        float a=32768.0f/65535*.75f;
+        for(unsigned side=0;side<2;++side) {
+            bool receives_low=route==0?side==0:route==1 || (route==2 && side==0) || (route==3 && side==1);
+            bool receives_high=route==0?side==1:receives_low;
+            assert(fabsf(last[side].amp_low-(receives_low?a:0))<1e-6f);
+            assert(fabsf(last[side].amp_high-(receives_high?.75f:0))<1e-6f);
+            if(receives_low) assert(last[side].freq_low==160);
+            if(receives_high) assert(last[side].freq_high==640);
+        }
+        pthread_mutex_unlock(&capture_lock);
+    }
+    /* Both bands can carry the same frequency. Profile changes don't multiply
+     * author-provided Nintendo amplitudes or overwrite native carrier values. */
+    before=snapshot().sends;
+    assert(sl_rumble_configure_ordinary(320,320,1,1));await_sends(before+1);
+    uint8_t absolute_test[69]={13,10,0,0,0,0x10};
+    uint32_t native_word=UINT32_C(0x60208180);
+    for(unsigned motor=0;motor<2;++motor)for(unsigned byte=0;byte<4;++byte)
+        absolute_test[7+motor*4+byte]=(uint8_t)(native_word>>(8*byte));
+    before=snapshot().sends;
+    assert(sl_rumble_command(0,absolute_test,69,monotonic_ns(),NULL)==0);await_sends(before+1);
+    before=snapshot().sends;
+    assert(sl_rumble_configure_ordinary(100,500,.5f,2));await_sends(before+1);
+    uint32_t relative_hold=UINT32_C(0x40000000) | 24u<<25 | 24u<<20;
+    for(unsigned motor=0;motor<2;++motor)for(unsigned byte=0;byte<4;++byte)
+        absolute_test[7+motor*4+byte]=(uint8_t)(relative_hold>>(8*byte));
+    before=snapshot().sends;
+    assert(sl_rumble_command(0,absolute_test,69,monotonic_ns(),NULL)==0);await_sends(before+1);
+    pthread_mutex_lock(&capture_lock);
+    for(unsigned side=0;side<2;++side) {
+        assert(last[side].freq_low==80 && last[side].freq_high==640);
+        assert(fabsf(last[side].amp_low-.2554743f)<1e-6f);
+    }
+    pthread_mutex_unlock(&capture_lock);
+    sl_rumble_shutdown();
+    assert(sl_rumble_init());
+    assert(snapshot().ordinary_config.low_hz==160 && snapshot().ordinary_config.high_hz==320);
+    assert(snapshot().ordinary_routing==0 && snapshot().ordinary_config_revision==0);
+    sl_rumble_shutdown();
+    puts("PASS native output worker, runtime frequency/routing, expiry, retries and join");
 }

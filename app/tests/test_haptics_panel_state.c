@@ -39,5 +39,7 @@ int main(void) {
     }
     s.on_ms=0; assert(!nsl_panel_start(&s,0));
     s.on_ms=100; s.mode=(nsl_panel_mode)3; assert(!nsl_panel_start(&s,0));
+    s.mode=NSL_PANEL_HOLD;s.limit_ms=0;assert(nsl_panel_start(&s,0));
+    assert(nsl_panel_next(&s,UINT64_C(86400000),out) && s.active && out[0]);
     puts("haptics panel scheduling, live changes, precision and stops passed");
 }

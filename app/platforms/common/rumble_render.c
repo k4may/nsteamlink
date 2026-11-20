@@ -23,7 +23,6 @@ bool sl_rumble_render_config_valid(const sl_rumble_render_config *c) {
          c->mode == SL_RUMBLE_RENDER_SDL_REFERENCE) &&
         isfinite(c->low_hz) && c->low_hz >= 41.0f && c->low_hz <= 626.0f &&
         isfinite(c->high_hz) && c->high_hz >= 82.0f && c->high_hz <= 1253.0f &&
-        c->low_hz < c->high_hz &&
         isfinite(c->low_max_amplitude) && c->low_max_amplitude >= 0.0f &&
         c->low_max_amplitude <= 1.0f &&
         isfinite(c->high_max_amplitude) && c->high_max_amplitude >= 0.0f &&
