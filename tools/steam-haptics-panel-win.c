@@ -30,6 +30,7 @@
 #include <math.h>
 #include "haptics-panel-state.h"
 #include "steam-active-config.h"
+#include "steam-haptics-host-inspect-win.h"
 
 #define METHOD(o, slot, type) ((type)((*(void ***)(o))[(slot) / 8]))
 #define UPDATE_CAPTURE (WM_APP + 1)
@@ -37,7 +38,7 @@
 enum { ID_ROUTE=100, ID_TARGET, ID_LOW, ID_HIGH, ID_LOW_EDIT, ID_HIGH_EDIT,
        ID_MODE, ID_ON, ID_OFF, ID_LIMIT, ID_PLAY, ID_STOP, ID_ADDRESS, ID_CONNECT,
        ID_LOGS, ID_ZERO, ID_WEAK, ID_MID, ID_FULL, ID_LOW_HZ, ID_HIGH_HZ,
-       ID_PEAK, ID_ROUTING, ID_APPLY, ID_320, ID_640, ID_HAPTICS_ON, ID_HAPTICS_OFF, ID_IDENTIFY };
+       ID_PEAK, ID_ROUTING, ID_APPLY, ID_320, ID_640, ID_HAPTICS_ON, ID_HAPTICS_OFF, ID_IDENTIFY, ID_NATIVE_TRAIN };
 typedef DWORD (WINAPI *get_state_fn)(DWORD, XINPUT_STATE *);
 typedef DWORD (WINAPI *set_state_fn)(DWORD, XINPUT_VIBRATION *);
 typedef void *(*create_fn)(const char *, int *);
@@ -67,6 +68,8 @@ static get_state_fn xget;
 static set_state_fn xset;
 static void *client, *input;
 static bool desktop_mode, desktop_ready, native_active;
+static uint64_t native_train_until, native_train_next;
+static unsigned native_train_on, native_train_off, native_train_repeat;
 static unsigned saved_on=500,saved_off=500,saved_limit;
 static bool native_controls;
 static void *desktop_controller, *desktop_map;
@@ -218,6 +221,51 @@ static bool desktop_details(unsigned index,uint64_t *handle,uint32_t *type) {
     memcpy(handle,info+0x20,8);memcpy(type,info+0x34,4);
     return *handle!=0;
 }
+static void inspect_host_gates(uint64_t handle,const char *label) {
+#ifdef NSL_PANEL_TEST
+    (void)handle;
+    log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":false,\"reason\":\"test_double\"",label);
+#else
+    if(!desktop_ready || !handle) return;
+    static DWORD cached_pid;
+    static uint64_t cached_parent;
+    static bool scanned;
+    HANDLE processes=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+    bool matched=false;
+    if(processes!=INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W process={.dwSize=sizeof(process)};
+        if(Process32FirstW(processes,&process)) do {
+            if(_wcsicmp(process.szExeFile,L"steam.exe")) continue;
+            HANDLE modules=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,process.th32ProcessID);
+            if(modules==INVALID_HANDLE_VALUE) continue;
+            MODULEENTRY32W module={.dwSize=sizeof(module)};
+            if(Module32FirstW(modules,&module)) do {
+                if(_wcsicmp(module.szModule,L"steamclient64.dll")) continue;
+                char sha[65];
+                if(!file_sha256(module.szExePath,sha) || strcmp(sha,desktop_sha)) continue;
+                matched=true;
+                HANDLE target=OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_INFORMATION,FALSE,process.th32ProcessID);
+                if(!target) {
+                    log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":false,\"reason\":\"process_read_access\",\"win32_error\":%lu",label,(unsigned long)GetLastError());
+                    break;
+                }
+                if(cached_pid!=process.th32ProcessID) {cached_pid=process.th32ProcessID;cached_parent=0;scanned=false;}
+                nsl_host_haptics_state value={0};nsl_host_inspection report;
+                int result=nsl_host_inspect_process(target,(uintptr_t)module.modBaseAddr,handle,&cached_parent,!scanned,&value,&report);
+                uint32_t writes=0;bool writes_read=nsl_host_process_read(target,(uintptr_t)module.modBaseAddr+0x1845410,&writes,sizeof(writes));
+                scanned=true;CloseHandle(target);
+                log_event("\"stage\":\"host_gate_lookup\",\"label\":\"%s\",\"pid\":%lu,\"result\":%d,\"tree_result\":%d,\"source\":\"%s\",\"scanned_bytes\":%llu,\"candidates\":%u,\"candidate_read_failures\":%u,\"bounded\":%s,\"producer_write_gate_available\":%s,\"producer_write_gate\":%lu",label,(unsigned long)process.th32ProcessID,result,report.tree_result,report.source,(unsigned long long)report.scanned_bytes,report.candidates,report.candidate_read_failures,report.bounded?"true":"false",writes_read?"true":"false",(unsigned long)writes);
+                if(result==1) log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":true,\"unlocked_observation\":true,\"slot\":%u,\"active_appid\":%lu,\"device_caps\":\"%llx\",\"config_caps\":\"%llx\",\"config_type\":%lu,\"pulse_gate\":%u,\"rumble_gate\":%u,\"config_pulse\":%u,\"config_rumble\":%u,\"preference_valid\":%u,\"haptics_preference\":%u,\"enhanced\":%u,\"ordinary_left\":%u,\"ordinary_right\":%u",label,value.slot,(unsigned long)value.appid,(unsigned long long)value.device_caps,(unsigned long long)value.config_caps,(unsigned long)value.config_type,value.pulse_gate,value.rumble_gate,value.config_pulse,value.config_rumble,value.preference_valid,value.haptics_preference,value.enhanced,value.ordinary_left,value.ordinary_right);
+                else log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":false,\"reason\":\"matching_state_not_read\",\"closed_gate_proven\":false",label);
+                break;
+            } while(Module32NextW(modules,&module));
+            CloseHandle(modules);
+        } while(Process32NextW(processes,&process));
+        CloseHandle(processes);
+    }
+    if(!matched) log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":false,\"reason\":\"pinned_64bit_host_not_found\"",label);
+#endif
+}
 static uint32_t desktop_request_appid(unsigned index,const char **source) {
     uint32_t active=0;*source="client_cache_unverified";
     memcpy(&active,(unsigned char *)desktop_controller+0x109608,4);
@@ -299,6 +347,7 @@ static bool send_levels(target t, uint16_t low, uint16_t high, const char *reaso
     return rc == ERROR_SUCCESS;
 }
 static void stop_output(const char *reason) {
+    native_train_until=native_train_next=0;
     bool was_active = state.active;
     if(native_active) {if(target_count) desktop_pulse(chosen.id,0,0,0,true);native_active=false;}
     profile_resume = false;
@@ -344,10 +393,22 @@ static void steam_log_initialization(void) {
         (unsigned long long)wcstoull(appid,NULL,10),(unsigned long long)wcstoull(gameid,NULL,10),
         (unsigned long)GetCurrentProcessId());
     if(desktop_mode) log_event("\"stage\":\"desktop_init\",\"ready\":%s,\"inherited_gameid\":%llu",desktop_ready?"true":"false",(unsigned long long)wcstoull(steam_context,NULL,10));
+#ifndef NSL_PANEL_TEST
+    if(desktop_ready) {
+        uint64_t game;memcpy(&game,(void *)(desktop_base+0x184db70),8);
+        uint32_t appid=((game>>24)&255)==2 ? (uint32_t)(game>>32) : (uint32_t)(game&0xffffff);
+        log_event("\"stage\":\"public_output_context\",\"gameid\":%llu,\"vibration_appid\":%lu,\"source\":\"pinned_steaminput_adapter_global\"",(unsigned long long)game,(unsigned long)appid);
+    }
+#endif
+}
+static unsigned selected_route(void) {
+    LRESULT selected=SendMessageW(route_box,CB_GETCURSEL,0,0);
+    LRESULT route=SendMessageW(route_box,CB_GETITEMDATA,selected,0);
+    return route==CB_ERR ? 0 : (unsigned)route;
 }
 static void scan_targets(bool force) {
     target found[16]; unsigned count = 0;
-    unsigned route = (unsigned)SendMessageW(route_box, CB_GETCURSEL, 0, 0);
+    unsigned route = selected_route();
     if(force && route>0 && !input_initialized) {steam_open();steam_log_initialization();}
     if (!route && xget) {
         for (DWORD i = 0; i < 4; ++i) {
@@ -425,7 +486,7 @@ static void scan_targets(bool force) {
     log_event("\"stage\":\"controllers\",\"route\":\"%s\",\"count\":%u", route_name(route), count);
 }
 static void start_output(void) {
-    if(SendMessageW(route_box,CB_GETCURSEL,0,0)==3) {
+    if(selected_route()==3) {
         unsigned on,off,repeat;
         if(!number(on_edit,1,65535,&on) || !number(off_edit,0,65535,&off) || !number(limit_edit,1,65535,&repeat)) {
             set_status(L"原生脉冲：持续1–65535微秒，间隔0–65535微秒，次数1–65535。");return;
@@ -433,6 +494,7 @@ static void start_output(void) {
         if(!input_initialized) scan_targets(true);
         stop_output("native_restart");
         if(!target_count || chosen.route!=3 || !desktop_ready) {set_status(L"未连接桌面原生接口或未找到Switch Pro；请用桌面启动脚本运行。");return;}
+        inspect_host_gates(chosen.id,"before_native_request");
         native_active=desktop_pulse(chosen.id,on,off,repeat,false);
         set_status(native_active?L"已向Steam请求双侧原生脉冲；是否收到非零原生包以回传记录为准。":L"原生请求未发出：手柄已断开或目标改变。");
         return;
@@ -445,7 +507,7 @@ static void start_output(void) {
         !number(limit_edit, 0, UINT32_MAX, &limit)) {
         set_status(L"时间需为整数；震动时间至少1ms，间隔可为0，上限为0表示不限。"); return;
     }
-    if(!input_initialized && SendMessageW(route_box,CB_GETCURSEL,0,0)>0) scan_targets(true);
+    if(!input_initialized && selected_route()>0) scan_targets(true);
     if (!target_count) { set_status(L"没有可用手柄。初始化和枚举结果已记录，可再次点击播放重试连接。"); return; }
     stop_output("restart");
     state.low=(uint16_t)low; state.high=(uint16_t)high;
@@ -455,6 +517,14 @@ static void start_output(void) {
         set_status(L"播放中：可实时调整力度和频率。停止 / 空格 / Esc / 关闭会归零。");
 }
 static void update_output(void) {
+    if(native_train_until && native_active) {
+        uint64_t now=now_ms();
+        if(now>=native_train_until) {stop_output("native_train_end");set_status(L"原生短脉冲连发已结束。");}
+        else if(now>=native_train_next) {
+            native_train_next=now+80;
+            if(!desktop_pulse(chosen.id,native_train_on,native_train_off,native_train_repeat,false)) stop_output("native_train_disconnected");
+        }
+    }
     uint16_t values[2];
     bool active = state.active;
     if (target_count && nsl_panel_next(&state, now_ms(), values)) {
@@ -686,11 +756,13 @@ static void create_controls(void) {
     label(L"A/B力度经Steam发送；输出Hz单独配置Switch映射，可固定力度比较频率。",20,15,700);
     label(L"发送方式",20,52,90);
     route_box=control(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,110,48,230,130,ID_ROUTE);
-    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"普通游戏路径 (XInput)");
-    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam Input 公开API（游戏对照）");
-    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam 桌面直连（无需添加游戏）");
-    SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)L"Steam 原生脉冲（桌面直连）");
-    SendMessageW(route_box,CB_SETCURSEL,desktop_mode?2:0,0);
+    const wchar_t *methods[]={L"普通游戏路径 (XInput)",L"Steam Input 公开API（游戏对照）",
+        L"Steam 桌面直连（无需添加游戏）",L"Steam 原生脉冲（桌面直连）"};
+    for(unsigned route=desktop_mode?2:0;route<(desktop_mode?4:2);++route) {
+        LRESULT index=SendMessageW(route_box,CB_ADDSTRING,0,(LPARAM)methods[route]);
+        SendMessageW(route_box,CB_SETITEMDATA,index,route);
+    }
+    SendMessageW(route_box,CB_SETCURSEL,0,0);
     target_box=control(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,350,48,355,160,ID_TARGET);
     low_label=control(L"STATIC",L"低频通道",0,20,100,105,25,0);
     low_slider=control(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,115,88,445,46,ID_LOW);
@@ -739,7 +811,7 @@ static void create_controls(void) {
     receive_label=control(L"STATIC",L"自动记录 Switch 实际收到的命令。",0,20,560,685,32,0);
     output_label=control(L"STATIC",L"本机输出参数将在这里显示。",0,20,600,685,65,0);
     control(L"BUTTON",L"Steam识别手柄",WS_TABSTOP,20,670,170,32,ID_IDENTIFY);
-    label(L"空格 / Esc 归零",205,678,175);
+    control(L"BUTTON",L"原生连发2秒",WS_TABSTOP,205,670,175,32,ID_NATIVE_TRAIN);
     control(L"BUTTON",L"启用Steam触觉",WS_TABSTOP,390,670,150,32,ID_HAPTICS_ON);
     control(L"BUTTON",L"关闭Steam触觉",WS_TABSTOP,550,670,155,32,ID_HAPTICS_OFF);
     uint16_t low=(uint16_t)GetPrivateProfileIntW(L"Panel",L"Low",6554,settings_path);
@@ -774,7 +846,7 @@ static LRESULT CALLBACK procedure(HWND h,UINT msg,WPARAM w,LPARAM l) {
                 else state.limit_ms=n;
             }
         } else if(id==ID_ROUTE && notification==CBN_SELCHANGE) {
-            bool native=SendMessageW(route_box,CB_GETCURSEL,0,0)==3;
+            bool native=selected_route()==3;
             stop_output("route_change");
             if(native!=native_controls) {
                 controls_changing=true;
@@ -811,11 +883,26 @@ static LRESULT CALLBACK procedure(HWND h,UINT msg,WPARAM w,LPARAM l) {
                 else if(desktop_identify(chosen.id)) set_status(L"已请求Steam内置识别反馈；这是诊断对照，不代表游戏高级震动已启用。");
                 else set_status(L"Steam未接受识别反馈请求，结果已记录。");
             }
+            else if(id==ID_NATIVE_TRAIN) {
+                if(selected_route()!=3) set_status(L"先选择Steam原生脉冲；连发仍经Steam，不改变单次脉冲强度。");
+                else {
+                    stop_output("native_train_restart");
+                    start_output();
+                    if(native_active) {
+                        number(on_edit,1,65535,&native_train_on);number(off_edit,0,65535,&native_train_off);number(limit_edit,1,65535,&native_train_repeat);
+                        native_train_until=now_ms()+2000;native_train_next=now_ms()+80;
+                        log_event("\"stage\":\"native_train_begin\",\"duration_ms\":2000,\"request_interval_ms\":80,\"flags\":0");
+                        set_status(L"经Steam连续请求2秒短脉冲；80ms是请求间隔，不是震动载波频率。");
+                    }
+                }
+            }
             else if(id==ID_HAPTICS_ON || id==ID_HAPTICS_OFF) {
                 stop_output("haptics_setting_change");
                 if(!target_count || chosen.route<2 || !desktop_ready) set_status(L"先选择桌面直连中的Switch Pro，再修改Steam触觉开关。");
-                else if(desktop_set_haptics(chosen.id,id==ID_HAPTICS_ON))
-                    set_status(id==ID_HAPTICS_ON?L"Steam已接受触觉开启请求；选择原生脉冲并播放，回传验证实际交付。":L"Steam已接受触觉关闭请求。");
+                else if(desktop_set_haptics(chosen.id,id==ID_HAPTICS_ON)) {
+                    inspect_host_gates(chosen.id,"after_haptics_setting");
+                    set_status(id==ID_HAPTICS_ON?L"Steam已接受触觉开启请求；主机状态已记录，交付仍需回传验证。":L"Steam已接受触觉关闭请求。");
+                }
                 else set_status(L"Steam未接受触觉设置请求；失败结果已记录。");
             }
             else if(id==ID_CONNECT) start_capture();

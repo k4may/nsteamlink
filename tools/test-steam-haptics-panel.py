@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wine-prefix", type=Path, required=True)
-    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_native", "desktop_native_close", "desktop_profile_log", "desktop_capture_timeout", "desktop_export", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
+    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_native", "desktop_native_close", "desktop_native_train", "desktop_profile_log", "desktop_capture_timeout", "desktop_export", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -42,6 +42,11 @@ def main():
     subprocess.run([str(out / "state-test")], check=True)
     environment = dict(os.environ, WINEPREFIX=str(args.wine_prefix.resolve()),
                        WINEDEBUG="-all", WINEDLLOVERRIDES="winemenubuilder.exe=d")
+    inspector=out / "host-inspect-test.exe"
+    subprocess.run(flags + [str(ROOT / "app/tests/test_steam_haptics_host_inspect_win.c"), "-o", str(inspector)],check=True)
+    inspected=subprocess.run(["wine",str(inspector)],env=environment,capture_output=True,text=True,check=True,timeout=15)
+    memory_report=json.loads(inspected.stdout.strip())
+    (out / "host-inspect.json").write_text(json.dumps(memory_report,indent=2)+"\n")
     # A real Windows/Winsock request/response boundary. It supplies only records
     # from the documented read-only diagnostics; no outgoing vibration shortcut.
     server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -115,7 +120,7 @@ def main():
         stopped.set()
         thread.join()
         server.close()
-    result = dict(passed=True, cases=report, actual_steam_verified=False,
+    result = dict(passed=True, cases=report, host_inspection=memory_report, actual_steam_verified=False,
                   remote_delivery_verified=False, physical_fidelity_verified=False)
     (out / "report.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

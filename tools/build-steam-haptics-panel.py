@@ -19,6 +19,8 @@ README = """NSteamLink · Steam 力度 / Switch 频率实时控制面板
 桌面直连使用Steam自身的内部IPC，请求仍由Steam经Remote Play发给Switch。
 它是诊断路径，不宣称代表普通游戏公开Steam Input API已成功。
 当前适配的是此前提供的Steam DLL版本；版本不匹配会记录实际SHA，不猜接口。
+桌面模式只显示桌面直连和原生脉冲。XInput/公开Steam Input的游戏对照保留在游戏启动模式；
+桌面进程没有XInput槽或只有Steam枚举句柄，不证明它具备游戏输出上下文。
 
 
 桌面输出与Steam内置对照
@@ -34,6 +36,12 @@ Steam原生反馈启用与发送
 3. 持续/间隔单位改为微秒，次数是重复数；默认1000/1000/20，点“播放”请求双侧原生脉冲。
 4. 本模式不使用A/B力度或Switch本地Hz映射，这些控制会变灰；停止/关闭会发送原生停止请求。
 5. 设置和播放的返回只表示Steam接受/调用完成，是否有非零原生包以Switch回传为准。
+“原生连发2秒”每80ms经Steam重新请求一次，便于感知很短的弱脉冲；80ms不是载波频率。
+Steam当前Switch分支将不同的持续/间隔/重复数降为固定短脉冲，本工具不能替Steam恢复丢失参数。
+开启触觉和发送原生脉冲时，会自动尝试只读采集Steam的配置能力、触觉偏好、
+原生输出开关和普通强度缓存，结果随ZIP导出。首次对象查找有750ms/256MiB上限，
+只保留匹配手柄的数值，不保存内存转储，不写Steam内存。读取不到明确记为未知，
+不把它当成开关关闭。这是定位工具，尚未证明能读取真实主机的全部状态。
 开启偏好后发送使用正常flags=0，不强制绕过Steam的输出检查；只停止使用Steam原本的停止标志。
 这能检验Steam原生请求到Switch输出，不能代替具体游戏的高级触觉兼容证明。
 
@@ -51,7 +59,7 @@ Switch使用正常客户端连接Steam，再从Steam库启动面板。
 两只手柄的低/高频带均可输出，输出位置也可选择双侧、仅左、仅右。
 
 两组控制分别做什么
-A/B是游戏原有的两路力度，始终经XInput或Steam Input → Steam → Remote Play发送。
+A/B是两路力度，由当前模式经桌面内部IPC或游戏API → Steam → Remote Play发送。
 输出Hz、幅度上限、输出位置是Switch普通震动渲染的实时配置，通过诊断UDP发送。
 频率配置不是Steam原生反馈字段，不把脉冲开关节奏假称为640Hz载波。
 应用配置先停止旧反馈，核对Switch回执，然后恢复原来的A/B力度。
@@ -101,7 +109,7 @@ def main():
         source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (exe, out / "使用说明.txt", launcher, collector)},
         sources={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h", ROOT / "tools/steam-active-config.h", ROOT / "tools/run-desktop-panel.ps1")},
+                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h", ROOT / "tools/steam-active-config.h", ROOT / "tools/steam-haptics-host-state.h", ROOT / "tools/steam-haptics-host-inspect-win.h", ROOT / "tools/run-desktop-panel.ps1")},
         actual_steam_verified=False, physical_fidelity_verified=False)
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     archive = out.parent / "NSteamLink-Steam-Haptics-Panel-Windows-x64.zip"

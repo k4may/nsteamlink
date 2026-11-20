@@ -10,7 +10,9 @@ typedef uint64_t (*mock_read_fn)(unsigned);
 typedef void (*mock_set_fn)(unsigned,uint64_t);
 static void click(unsigned id) { SendMessageW(window,WM_COMMAND,MAKEWPARAM(id,BN_CLICKED),0); }
 static void choose_route(unsigned id) {
-    SendMessageW(route_box,CB_SETCURSEL,id,0);
+    LRESULT count=SendMessageW(route_box,CB_GETCOUNT,0,0), selected=CB_ERR;
+    for(LRESULT i=0;i<count;++i) if(SendMessageW(route_box,CB_GETITEMDATA,i,0)==id) selected=i;
+    assert(selected!=CB_ERR);SendMessageW(route_box,CB_SETCURSEL,selected,0);
     SendMessageW(window,WM_COMMAND,MAKEWPARAM(ID_ROUTE,CBN_SELCHANGE),0);
 }
 static void tick(void) { SendMessageW(window,WM_TIMER,1,0); }
@@ -22,15 +24,20 @@ static void panel_self_test(void) {
     mock_set_fn ss=(mock_set_fn)(uintptr_t)GetProcAddress(smodule,"NslMockSet");
     if(!wcsncmp(scenario,L"desktop",7)) {
         assert(desktop_mode && desktop_ready && steam_user && target_count==1 && chosen.route==2);
+        assert(SendMessageW(route_box,CB_GETCOUNT,0,0)==2);
         stop_capture();levels(789,23456);click(ID_PLAY);tick();assert(sr(0)==789 && sr(1)==23456);
-        if(!wcscmp(scenario,L"desktop_native") || !wcscmp(scenario,L"desktop_native_close")) {
+        if(!wcscmp(scenario,L"desktop_native") || !wcscmp(scenario,L"desktop_native_close") || !wcscmp(scenario,L"desktop_native_train")) {
             unsigned ordinary_on=state.on_ms,ordinary_off=state.off_ms;
             choose_route(3);assert(chosen.route==3 && native_controls && !state.active && !sr(0));
             click(ID_HAPTICS_ON);assert(sr(10)==1);
             SetWindowTextW(on_edit,L"250");SetWindowTextW(off_edit,L"750");SetWindowTextW(limit_edit,L"4");
-            click(ID_PLAY);assert(native_active && sr(5)==2 && sr(6)==0 && sr(7)==250 && sr(8)==750 && sr(9)==4);
+            bool train=wcscmp(scenario,L"desktop_native")!=0;
+            click(train?ID_NATIVE_TRAIN:ID_PLAY);assert(native_active && sr(5)==2 && sr(6)==0 && sr(7)==250 && sr(8)==750 && sr(9)==4);
             if(!wcscmp(scenario,L"desktop_native_close")) {log_event("\"stage\":\"ui_test_passed\"");PostMessageW(window,WM_CLOSE,0,0);return;}
-            click(ID_STOP);assert(!native_active && sr(5)==4 && sr(6)==2 && !sr(7));
+            if(train) {
+                assert(native_train_until);native_train_next=1;tick();assert(sr(5)==4 && sr(6)==0);
+                native_train_until=1;tick();assert(!native_active && !native_train_until && sr(5)==6 && sr(6)==2 && !sr(7));
+            } else {click(ID_STOP);assert(!native_active && sr(5)==4 && sr(6)==2 && !sr(7));}
             click(ID_HAPTICS_OFF);assert(sr(10)==0);
             choose_route(2);assert(!native_controls && chosen.route==2 && state.on_ms==ordinary_on && state.off_ms==ordinary_off);
         } else if(!wcscmp(scenario,L"desktop_profile_log")) {

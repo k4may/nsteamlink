@@ -618,6 +618,12 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 原生非零请求不使用强制输出标志。底部“Steam识别手柄”请求 Steam 自带
 识别反馈，作为独立诊断对照；它不证明游戏高级震动已启用。普通桌面请求
 优先使用对应手柄最近的 Steam 配置激活日志，记录来源；这不是原子状态读回。
+桌面启动只显示桌面直连和原生脉冲，游戏启动模式保留XInput/公开Steam Input。
+原生模式可点“原生连发2秒”，每80ms经Steam重新请求一个短脉冲，便于感知；
+这是请求间隔，不是载波频率。Steam当前Switch分支不完整保留单次脉冲的
+持续/间隔/重复数，不能用这些字段数值推断最终持续时间或力度。
+设置触觉和请求原生脉冲时会自动尝试只读记录Steam主机的配置、偏好和输出
+开关；查找有界，不写内存，不保存内存转储，读取不到明确记录为未知。
 
 普通游戏对照仍可将 EXE 添加为非 Steam 游戏并从库启动，默认使用
 `XInputSetState`，可切换公开`SteamInput006::TriggerVibration`；继承游戏
