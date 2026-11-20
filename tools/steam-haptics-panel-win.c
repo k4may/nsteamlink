@@ -254,7 +254,7 @@ static void inspect_host_gates(uint64_t handle,const char *label) {
                 int result=nsl_host_inspect_process(target,(uintptr_t)module.modBaseAddr,handle,&cached_parent,!scanned,&value,&report);
                 uint32_t writes=0;bool writes_read=nsl_host_process_read(target,(uintptr_t)module.modBaseAddr+0x1845410,&writes,sizeof(writes));
                 scanned=true;CloseHandle(target);
-                log_event("\"stage\":\"host_gate_lookup\",\"label\":\"%s\",\"pid\":%lu,\"result\":%d,\"tree_result\":%d,\"source\":\"%s\",\"scanned_bytes\":%llu,\"candidates\":%u,\"candidate_read_failures\":%u,\"bounded\":%s,\"producer_write_gate_available\":%s,\"producer_write_gate\":%lu",label,(unsigned long)process.th32ProcessID,result,report.tree_result,report.source,(unsigned long long)report.scanned_bytes,report.candidates,report.candidate_read_failures,report.bounded?"true":"false",writes_read?"true":"false",(unsigned long)writes);
+                log_event("\"stage\":\"host_gate_lookup\",\"label\":\"%s\",\"pid\":%lu,\"result\":%d,\"tree_result\":%d,\"source\":\"%s\",\"scanned_bytes\":%llu,\"candidates\":%u,\"candidate_read_failures\":%u,\"bounded\":%s,\"producer_write_gate_available\":%s,\"producer_write_gate_raw\":%lu,\"producer_write_gate\":%s",label,(unsigned long)process.th32ProcessID,result,report.tree_result,report.source,(unsigned long long)report.scanned_bytes,report.candidates,report.candidate_read_failures,report.bounded?"true":"false",writes_read?"true":"false",(unsigned long)writes,writes?"true":"false");
                 if(result==1) log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":true,\"unlocked_observation\":true,\"slot\":%u,\"active_appid\":%lu,\"device_caps\":\"%llx\",\"config_caps\":\"%llx\",\"config_type\":%lu,\"pulse_gate\":%u,\"rumble_gate\":%u,\"config_pulse\":%u,\"config_rumble\":%u,\"preference_valid\":%u,\"haptics_preference\":%u,\"enhanced\":%u,\"ordinary_left\":%u,\"ordinary_right\":%u",label,value.slot,(unsigned long)value.appid,(unsigned long long)value.device_caps,(unsigned long long)value.config_caps,(unsigned long)value.config_type,value.pulse_gate,value.rumble_gate,value.config_pulse,value.config_rumble,value.preference_valid,value.haptics_preference,value.enhanced,value.ordinary_left,value.ordinary_right);
                 else log_event("\"stage\":\"host_gate_state\",\"label\":\"%s\",\"available\":false,\"reason\":\"matching_state_not_read\",\"closed_gate_proven\":false",label);
                 break;
@@ -474,7 +474,7 @@ static void scan_targets(bool force) {
         SendMessageW(target_box, CB_ADDSTRING, 0, (LPARAM)text);
     }
     if (count) { chosen = found[select]; SendMessageW(target_box, CB_SETCURSEL, select, 0);
-        if(route>=2) set_status(route==3?L"Steam原生脉冲：时间单位是微秒，次数为重复数；A/B力度和本地Hz不参与。":L"桌面直连已找到 Switch Pro，可以播放；实际收包见下方回传。"); }
+        if(route>=2) set_status(route==3?L"单次是很短的弱点击；用原生连发2秒体验。请求时间/次数不会被Steam完整保留。":L"桌面直连已找到 Switch Pro，可以播放；实际收包见下方回传。"); }
     else if(route>0 && !input_initialized) {
         const wchar_t *reasons[]={L"未就绪",L"未找到Steam安装路径",L"Steam路径无效",L"加载Steam客户端DLL失败",
             L"Steam客户端接口未返回",L"连接Steam用户失败",L"Steam Input接口未返回",L"Steam Input初始化失败"};
@@ -496,7 +496,7 @@ static void start_output(void) {
         if(!target_count || chosen.route!=3 || !desktop_ready) {set_status(L"未连接桌面原生接口或未找到Switch Pro；请用桌面启动脚本运行。");return;}
         inspect_host_gates(chosen.id,"before_native_request");
         native_active=desktop_pulse(chosen.id,on,off,repeat,false);
-        set_status(native_active?L"已向Steam请求双侧原生脉冲；是否收到非零原生包以回传记录为准。":L"原生请求未发出：手柄已断开或目标改变。");
+        set_status(native_active?L"已请求一次双侧弱点击，可能难以感知；可用原生连发2秒对比。":L"原生请求未发出：手柄已断开或目标改变。");
         return;
     }
     unsigned on, off, limit, low, high;
@@ -852,9 +852,10 @@ static LRESULT CALLBACK procedure(HWND h,UINT msg,WPARAM w,LPARAM l) {
                 controls_changing=true;
                 if(native) {saved_on=state.on_ms;saved_off=state.off_ms;saved_limit=state.limit_ms;}
                 native_controls=native;
+                SetWindowTextW(GetDlgItem(window,ID_PLAY),native?L"单次短脉冲（很弱）":L"播放（实时调节）");
                 SetWindowTextW(on_label,native?L"持续 μs":L"震动 ms");
                 SetWindowTextW(off_label,native?L"间隔 μs":L"间隔 ms");
-                SetWindowTextW(limit_label,native?L"原生重复次数":L"上限ms (0不限)");
+                SetWindowTextW(limit_label,native?L"请求重复数":L"上限ms (0不限)");
                 put_number(on_edit,native?1000:saved_on);put_number(off_edit,native?1000:saved_off);put_number(limit_edit,native?20:saved_limit);
                 HWND other[]={low_slider,high_slider,low_edit,high_edit,mode_box,low_hz_edit,high_hz_edit,peak_edit,routing_box};
                 for(unsigned i=0;i<sizeof(other)/sizeof(other[0]);++i) EnableWindow(other[i],!native);

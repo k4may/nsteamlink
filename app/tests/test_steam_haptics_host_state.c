@@ -59,6 +59,8 @@ int main(void) {
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 1);
     assert(s.slot == 0 && s.device_caps == 0x8b6bff && s.config_caps == 0x8b6bff);
     assert(s.appid == 769 && s.pulse_gate && s.config_pulse && s.haptics_preference && s.preference_valid);
+    put(0x1801f0, 53, 1); /* Real host observation: the getter normalizes nonzero. */
+    assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 1 && s.preference_valid == 1);
     /* Actual forwarding selects +0x190 for flag=0. The old discovery skipped
      * every such parent before checking whether its IO is inspectable. */
     put(0x180000 + 0x10922d, 0, 1);put(0x180190, 0x2a0000, 8);

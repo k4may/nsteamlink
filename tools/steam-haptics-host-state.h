@@ -65,6 +65,8 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         READ(config + 0x660, value.config_rumble);
         READ(config + 0x661, value.config_pulse);
         READ(parent + slot * 0xe0 + 0x1f0, value.preference_valid);
+        /* The original getter tests nonzero; this byte is not restricted to 1. */
+        value.preference_valid = value.preference_valid != 0;
         READ(parent + slot * 0xe0 + 0x230 + 0x8c, value.haptics_preference);
         uint64_t check;
         READ(abstraction + 0x98, check);
