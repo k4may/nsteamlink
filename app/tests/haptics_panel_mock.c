@@ -13,6 +13,8 @@ static object client={client_slots},input={input_slots};
 static uint64_t handle=0x123456789;
 static unsigned low,high,calls,mask=1,empty,type=10,shutdown_count;
 static bool initialized,shutdown_done,released;
+static unsigned pipe_attempts;
+static unsigned user_attempts;
 __declspec(dllexport) uint64_t NslMockRead(unsigned which) {
     switch(which) { case 0:return low; case 1:return high; case 2:return calls;
         case 3:return handle; case 4:return shutdown_count; default:return 0; }
@@ -31,8 +33,16 @@ __declspec(dllexport) DWORD WINAPI XInputSetState(DWORD index,XINPUT_VIBRATION *
     low=v->wLeftMotorSpeed;high=v->wRightMotorSpeed;++calls;
     return index<4 && mask&(1u<<index)?ERROR_SUCCESS:ERROR_DEVICE_NOT_CONNECTED;
 }
-static int pipe_create(void *self) { assert(self==&client);return 7; }
-static int user_create(void *self,int pipe) { assert(self==&client && pipe==7);return 11; }
+static int pipe_create(void *self) {
+    assert(self==&client);
+    if(GetEnvironmentVariableA("NSL_PANEL_INIT_FAIL_ONCE",NULL,0) && !pipe_attempts++) return 0;
+    return 7;
+}
+static int user_create(void *self,int pipe) {
+    assert(self==&client && pipe==7);
+    if(GetEnvironmentVariableA("NSL_PANEL_USER_FAIL_ONCE",NULL,0) && !user_attempts++) return 0;
+    return 11;
+}
 static void *interface_get(void *self,int user,int pipe,const char *version) {
     assert(self==&client && pipe==7 && user==11 && !strcmp(version,"SteamInput006")); return &input;
 }
@@ -58,9 +68,9 @@ static bool input_shutdown(void *self) {
     shutdown_done=true;++shutdown_count;return true;
 }
 static void user_release(void *self,int pipe,int user) {
-    assert(self==&client && pipe==7 && user==11 && shutdown_done); released=true;
+    assert(self==&client && pipe==7 && user==11 && (!initialized || shutdown_done)); released=true;
 }
-static bool pipe_release(void *self,int pipe) { assert(self==&client && pipe==7 && released);return true; }
+static bool pipe_release(void *self,int pipe) { assert(self==&client && pipe==7 && (!initialized || released));return true; }
 __declspec(dllexport) void *CreateInterface(const char *name,int *rc) {
     (void)rc;assert(!strcmp(name,"SteamClient023"));
     client_slots[0]=pipe_create;client_slots[1]=pipe_release;client_slots[2]=user_create;

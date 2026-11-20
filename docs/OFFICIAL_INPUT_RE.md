@@ -2368,3 +2368,29 @@ Steamworks `TriggerVibration`也是两路强度，不能从通用接口假定游
 频率，在两个参数带的可表达交叠范围内比较，再固定频带逐级改变幅度；
 保存活动参数读回、用户观察及可获得的外部机械测量。不能仅凭编码合法或
 成功IPC就认为游戏实际弱震/高频效果必然可感知，也不能无标定统一放大。
+
+### 22.23 Windows面板初始化失败与空列表的区别
+
+**Evidence：** 用户`session-20261120-151633-20776.jsonl`记录启动94ms时
+`steam_input_init.ready=false, failure_step=5`，约61秒切换到Steam Input时
+列表数量为0；全文件没有`steam_enumeration`，1148条请求全是XInput。
+`steam-haptics-panel-win.c`的step5对应`CreateSteamPipe`或
+`ConnectToGlobalUser`失败，发生在取得SteamInput006/调用Init之前。枚举分支
+要求`input_initialized`，因此这份记录中的0是界面空状态，并非公开枚举调用
+返回0。原启动函数只调用一次，后续切换/播放未重试，是工具生命周期疏漏。
+
+**Correction：** 撤回将这次空列表直接解释为“公开Steam Input枚举/关联查询
+为空”的判断；新记录证实两种查询根本没运行。§22.14所述AppID过滤仍是独立
+代码事实，但不能用于解释这次更早的连接失败。也没有依据从本次空列表断定
+Switch身份/能力位被Steam拒绝。该客户端实际记录057e:2009、Switch Pro名称、
+caps=0x836bff及nativePulse=1，身份/格式/原生能力仍需各自判断。
+
+**Decision：** 保留当前可工作的XInput路径；启动连接失败后，显式切换Steam
+Input或点击播放时可重新建立会话。重试先释放旧的部分user/pipe，不重复加载
+DLL，不借用别的游戏AppID或改变设备上报；记录独立pipe/user值区分初次失败。
+用真实Win32控件分别注入首次CreateSteamPipe失败、首次ConnectToGlobalUser
+失败，覆盖后续连接、枚举、非零请求及完整释放。
+
+**Boundary：** 原日志step5未区分pipe或user，第一次连接失败的底层原因没有
+由此确定。修复失败状态永久沿用的代码，不据此宣称真实Steam API连接已恢复；
+与用户已经确认的XInput远程震动交付分开记录。

@@ -152,6 +152,12 @@ static void stop_output(const char *reason) {
     state.sent_low = state.sent_high = 0; state.sent = true; state.last_send_ms = now_ms();
 }
 static void steam_open(void) {
+    if(input_initialized) return;
+    /* A launch-time connection failure is not permanent. Release any partial
+     * pipe/user before an explicit retry; keep the loaded DLL reference. */
+    if(steam_user && client) METHOD(client,0x20,release_user_fn)(client,steam_pipe,steam_user);
+    if(steam_pipe && client) METHOD(client,8,release_pipe_fn)(client,steam_pipe);
+    steam_user=steam_pipe=0;input=NULL;
     steam_init_step=1;
     wchar_t root[MAX_PATH], path[MAX_PATH];
     if (root_override[0]) wcscpy(root, root_override);
@@ -163,7 +169,8 @@ static void steam_open(void) {
     steam_init_step=2;
     if (wcslen(root) > MAX_PATH - 32) return;
     swprintf(path, MAX_PATH, L"%ls\\steamclient64.dll", root);
-    steam_init_step=3;smodule = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    steam_init_step=3;
+    if(!smodule) smodule = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!smodule) return;
     steam_init_step=4;create_fn create = (create_fn)(uintptr_t)GetProcAddress(smodule, "CreateInterface");
     if (!create || !(client = create("SteamClient023", NULL))) return;
@@ -173,9 +180,17 @@ static void steam_open(void) {
     if (input) {steam_init_step=7;input_initialized = METHOD(input, 0, init_fn)(input, true);}
     if(input_initialized) steam_init_step=0;
 }
+static void steam_log_initialization(void) {
+    wchar_t appid[32]={0};GetEnvironmentVariableW(L"SteamAppId",appid,32);
+    log_event("\"stage\":\"steam_input_init\",\"ready\":%s,\"failure_step\":%u,\"pipe\":%d,\"user\":%d,\"appid\":%llu,\"gameid\":%llu,\"pid\":%lu",
+        input_initialized?"true":"false",steam_init_step,steam_pipe,steam_user,
+        (unsigned long long)wcstoull(appid,NULL,10),(unsigned long long)wcstoull(steam_context,NULL,10),
+        (unsigned long)GetCurrentProcessId());
+}
 static void scan_targets(bool force) {
     target found[16]; unsigned count = 0;
     unsigned route = (unsigned)SendMessageW(route_box, CB_GETCURSEL, 0, 0);
+    if(force && route==1 && !input_initialized) {steam_open();steam_log_initialization();}
     if (!route && xget) {
         for (DWORD i = 0; i < 4; ++i) {
             XINPUT_STATE value;
@@ -250,7 +265,8 @@ static void start_output(void) {
         !number(limit_edit, 0, UINT32_MAX, &limit)) {
         set_status(L"时间需为整数；震动时间至少1ms，间隔可为0，上限为0表示不限。"); return;
     }
-    if (!target_count) { set_status(L"没有可用手柄。请先连接 Switch，从 Steam 库启动本工具。"); return; }
+    if(!input_initialized && SendMessageW(route_box,CB_GETCURSEL,0,0)==1) scan_targets(true);
+    if (!target_count) { set_status(L"没有可用手柄。初始化和枚举结果已记录，可再次点击播放重试连接。"); return; }
     stop_output("restart");
     state.low=(uint16_t)low; state.high=(uint16_t)high;
     state.on_ms = on; state.off_ms = off; state.limit_ms = limit;
@@ -622,10 +638,7 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE previous,PWSTR cmd,int show) {
     GetEnvironmentVariableW(L"SteamGameId",steam_context,96);
     log_event("\"stage\":\"begin\",\"launched_with_steam_context\":%s,\"physical_fidelity_verified\":false",steam_context[0]?"true":"false");
     steam_open();
-    wchar_t appid[32]={0};GetEnvironmentVariableW(L"SteamAppId",appid,32);
-    log_event("\"stage\":\"steam_input_init\",\"ready\":%s,\"failure_step\":%u,\"appid\":%llu,\"gameid\":%llu,\"pid\":%lu",
-        input_initialized?"true":"false",steam_init_step,(unsigned long long)wcstoull(appid,NULL,10),
-        (unsigned long long)wcstoull(steam_context,NULL,10),(unsigned long)GetCurrentProcessId());
+    steam_log_initialization();
 #ifdef NSL_PANEL_TEST
     wchar_t xfile[MAX_PATH]; swprintf(xfile,MAX_PATH,L"%ls\\nsl-xinput-mock.dll",root_override);
     xmodule=LoadLibraryExW(xfile,NULL,LOAD_WITH_ALTERED_SEARCH_PATH);

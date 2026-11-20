@@ -40,6 +40,11 @@ static void panel_self_test(void) {
         click(ID_STOP);SetWindowTextW(low_edit,L"65536");click(ID_PLAY);assert(!state.active);
         levels(1,2);SetWindowTextW(on_edit,L"0");click(ID_PLAY);assert(!state.active);
         SetWindowTextW(on_edit,L"100");SetWindowTextW(limit_edit,L"bad");click(ID_PLAY);assert(!state.active);
+    } else if(!wcscmp(scenario,L"init_retry") || !wcscmp(scenario,L"user_retry")) {
+        assert(!input_initialized && steam_init_step==5);
+        assert(steam_pipe==(!wcscmp(scenario,L"user_retry")?7:0) && !steam_user);
+        choose_route(1);assert(input_initialized && target_count==1 && steam_pipe==7 && steam_user==11);
+        levels(789,23456);click(ID_PLAY);tick();assert(sr(0)==789 && sr(1)==23456);
     } else if(!wcscmp(scenario,L"empty_public")) {
         ss(1,1);choose_route(1);assert(target_count==1);
         levels(789,23456);click(ID_PLAY);tick();assert(sr(0)==789 && sr(1)==23456);

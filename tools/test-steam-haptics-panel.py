@@ -74,10 +74,13 @@ def main():
     thread.start()
     report = []
     try:
-        for case in ("close", "focus", "disconnect", "invalid", "steam", "empty_public", "pulse", "capture", "frequency"):
+        for case in ("close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency"):
+            case_env=dict(environment, NSL_PANEL_CASE=case)
+            if case=="init_retry":case_env["NSL_PANEL_INIT_FAIL_ONCE"]="1"
+            if case=="user_retry":case_env["NSL_PANEL_USER_FAIL_ONCE"]="1"
             run = subprocess.run(["wine", str(out / "panel-ui-test.exe"), "--steam-root",
                 "Z:" + str(mock).replace("/", "\\")],
-                env=dict(environment, NSL_PANEL_CASE=case), capture_output=True, timeout=45)
+                env=case_env, capture_output=True, timeout=45)
             (out / f"{case}.stderr").write_bytes(run.stderr)
             if run.returncode:
                 raise AssertionError((case, run.returncode, run.stderr.decode(errors="replace")))

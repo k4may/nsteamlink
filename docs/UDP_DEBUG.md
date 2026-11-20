@@ -638,6 +638,10 @@ Steam普通源已有Hz字段；力度仍始终通过Steam传输。
 查询实际XInput槽的关联句柄并去重；初始化失败与两个查询均为空分别报告，
 不复制XInput索引冒充Steam句柄、不改设备能力。记录包含初始化阶段、真实
 应用上下文、原生列表数量及关联补充数量。
+如果启动时连接Steam失败，切换Steam Input或点击播放会重新建立会话并释放
+旧的部分user/pipe；初始化失败与真正的枚举为空分开显示。日志中的
+`steam_input_init`含failure_step及pipe/user，不能把未初始化的空界面当成
+Steam已经检查并拒绝了手柄。
 
 `rumble-config`查询映射；`rumble-config <low_hz> <high_hz> <peak> <routing>`
 设置并回传。low范围41..626Hz，high范围82..1253Hz，彼此独立可重叠；peak
