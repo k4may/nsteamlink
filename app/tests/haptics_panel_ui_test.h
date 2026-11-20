@@ -33,6 +33,18 @@ static void panel_self_test(void) {
             click(ID_STOP);assert(!native_active && sr(5)==4 && sr(6)==2 && !sr(7));
             click(ID_HAPTICS_OFF);assert(sr(10)==0);
             choose_route(2);assert(!native_controls && chosen.route==2 && state.on_ms==ordinary_on && state.off_ms==ordinary_off);
+        } else if(!wcscmp(scenario,L"desktop_profile_log")) {
+            wchar_t folder[MAX_PATH],path[MAX_PATH];swprintf(folder,MAX_PATH,L"%ls\\logs",steam_root);CreateDirectoryW(folder,NULL);
+            swprintf(path,MAX_PATH,L"%ls\\controller.txt",folder);FILE *f=_wfopen(path,L"wb");assert(f);
+            fputs("[17:14:01] Queueing activation for controller: 0 app: 769\n[17:14:08] Queueing activation for controller: 0 app: 413080\n",f);fclose(f);
+            ss(5,413080);state.last_send_ms=0;tick();assert(sr(0)==789);
+            click(ID_STOP);DeleteFileW(path);ss(5,769);
+            click(ID_IDENTIFY);assert(sr(11)==1);
+        } else if(!wcscmp(scenario,L"desktop_capture_timeout")) {
+            SetWindowTextW(address_edit,L"127.0.0.1");start_capture();Sleep(1400);stop_capture();
+            assert(desktop_ready && target_count==1 && !capture_packets);
+        } else if(!wcscmp(scenario,L"desktop_export")) {
+            click(ID_LOGS);
         } else if(!wcscmp(scenario,L"desktop_app_change")) {
             ss(4,413080);state.last_send_ms=0;tick();assert(sr(0)==789);
         } else if(!wcscmp(scenario,L"desktop_disconnect")) {

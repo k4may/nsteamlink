@@ -14,11 +14,19 @@ README = """NSteamLink · Steam 力度 / Switch 频率实时控制面板
 保持Steam运行、Switch正常客户端连接Steam。解压后双击Start-Desktop-Panel.cmd，
 无需添加非Steam游戏。默认选择“Steam 桌面直连”，找到Switch Pro后调A/B并点播放。
 频率和输出位置继续在同一面板调节，Switch无需更新。
-点停止归零，关闭面板后本文件夹自动生成desktop-results-日期.zip，包含本次日志及Steam错误。
+点“导出 / 打开记录”可在窗口仍打开时生成ZIP并自动选中；关闭面板也会自动导出。
+正常导出会复制到程序目录；目录不可写时保存在%LOCALAPPDATA%\\NSteamLink\\HapticsPanel\\Exports，仍自动选中。
 桌面直连使用Steam自身的内部IPC，请求仍由Steam经Remote Play发给Switch。
 它是诊断路径，不宣称代表普通游戏公开Steam Input API已成功。
 当前适配的是此前提供的Steam DLL版本；版本不匹配会记录实际SHA，不猜接口。
 
+
+桌面输出与Steam内置对照
+底部“Steam识别手柄”调用Steam自身的识别反馈，独立于普通请求的应用配置匹配。
+这是诊断对照，不是游戏高级震动兼容证明。
+普通桌面请求优先使用Steam日志中对应手柄最近的配置激活AppID，避免进程缓存停在769。
+该值是激活请求记录，不冒充服务端原子读回；实际是否输出仍看回传和体验。
+Steam枚举成功与Switch UDP采集无回应是两条链路，采集失败会记录地址、请求和Winsock错误。
 
 Steam原生反馈启用与发送
 1. 双击Start-Desktop-Panel.cmd，选择“Steam 原生脉冲（桌面直连）”。
@@ -64,7 +72,7 @@ Steam Input枚举
 开关时间可改；播放上限0表示不限。切换窗口可以继续播放。
 停止按钮、空格/Esc、断线、换目标或关闭会归零，重连不自动恢复。
 Switch地址默认10.10.10.111，可修改后连接采集。面板自动保存主机请求与回传；
-点击“打开记录文件夹”可找到session-*.jsonl。
+点击“导出 / 打开记录”取得结果包；原始session-*.jsonl一直保存在记录目录。
 设置与日志位于 %LOCALAPPDATA%\\NSteamLink\\HapticsPanel。
 """
 
@@ -93,7 +101,7 @@ def main():
         source_commit=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (exe, out / "使用说明.txt", launcher, collector)},
         sources={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in
-                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h", ROOT / "tools/run-desktop-panel.ps1")},
+                 (ROOT / "tools/steam-haptics-panel-win.c", ROOT / "tools/haptics-panel-state.h", ROOT / "tools/steam-active-config.h", ROOT / "tools/run-desktop-panel.ps1")},
         actual_steam_verified=False, physical_fidelity_verified=False)
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     archive = out.parent / "NSteamLink-Steam-Haptics-Panel-Windows-x64.zip"

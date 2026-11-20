@@ -615,7 +615,9 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 “Steam原生脉冲”模式可显式开/关 Steam 当前手柄的触觉偏好，再按微秒持续、
 间隔和重复次数请求双侧反馈；A/B和本地Hz在此模式禁用。设置由Steam保存，
 需要时点击“关闭Steam触觉”；接受请求不等于真实原生包已经交付。
-关闭窗口自动打包本次日志，原生非零请求不使用强制输出标志。
+原生非零请求不使用强制输出标志。底部“Steam识别手柄”请求 Steam 自带
+识别反馈，作为独立诊断对照；它不证明游戏高级震动已启用。普通桌面请求
+优先使用对应手柄最近的 Steam 配置激活日志，记录来源；这不是原子状态读回。
 
 普通游戏对照仍可将 EXE 添加为非 Steam 游戏并从库启动，默认使用
 `XInputSetState`，可切换公开`SteamInput006::TriggerVibration`；继承游戏
@@ -634,7 +636,10 @@ Steam普通源已有Hz字段；力度仍始终通过Steam传输。
 输入Switch地址后，独立可join线程仅查询UDP28772的`haptics`及分页
 `haptic-trace`，不向设备注入震动。界面分别显示最近接收的源类型/普通原值、
 两只震动器的提交参数。主机请求与带采集时刻的设备记录共同保存在
-`%LOCALAPPDATA%\NSteamLink\HapticsPanel\session-*.jsonl`；可从面板打开目录。
+`%LOCALAPPDATA%\NSteamLink\HapticsPanel\session-*.jsonl`。
+点击“导出 / 打开记录”可在窗口仍打开时生成 ZIP 并自动选中；关闭窗口也会
+自动打包。ZIP 优先复制到程序目录，目录不可写时保留在上述目录的 `Exports`。
+采集无回包会记录地址、请求与 Winsock 错误，不据此判断客户端未运行。
 主机API返回、收到命令、IPC提交以及用户手感分别判断，不能仅凭调用返回
 认证Remote Play交付。若XInput未出现手柄，可对比Steam Input路径，并检查
 该非Steam程序启用Steam输入及“手柄”布局。全链路测试运行正常客户端，

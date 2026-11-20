@@ -410,6 +410,12 @@ def rpc_bridge_evidence(pe):
         assert bytes(wire)==expected and m.reg('rax')==1, wire.hex()
         setting_wires.append(wire.hex())
     assert acknowledged == [reply]*5
+    wire.clear();m.allowed += [(0x138869b70,0x138869e20)]
+    m.run(0x138869b70,obj,4)
+    expected=bytes([1,0x29])+rumble.struct.pack('<IIII',0,0x4c9db0fc,4,0x51ba1617)
+    assert bytes(wire)==expected and m.reg('rax')==1,wire.hex()
+    identify_wire=wire.hex()
+    assert acknowledged==[reply]*6
     m.u.mem_write(details + 0xfe8 + index * 88, bytes(supplied))
     m.allowed += [(0x138619090, 0x13861912b)]
     m.run(0x138619090, details, index, output)
@@ -419,7 +425,7 @@ def rpc_bridge_evidence(pe):
     assert freed == [(obj, 32)]
     return dict(passed=True, factory_pipe=0, factory_user=11,
                 vtable_rva='1369980', pulse_rpc_wire=pulse_wire, rumble_rpc_wire=rumble_wire, details_rpc_wire=details_wire,
-                server_arguments=forwarded[0][1:], details_bytes=88, haptics_setting_rpc_wires=setting_wires,
+                server_arguments=forwarded[0][1:], details_bytes=88, haptics_setting_rpc_wires=setting_wires, identify_rpc_wire=identify_wire,
                 owned_map_freed=True, actual_steam_ipc_verified=False)
 
 

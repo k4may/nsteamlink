@@ -2523,9 +2523,11 @@ remote session 分别为 3、4、5。这是实际 Steam 的内部只读查询结
 固定 §22.11 DLL 的 owned controller map `+0x338` 查询 88B 设备详情，
 按有效 Switch Pro handle 枚举并在每次发送前重新匹配 index；map `+0x2b8`
 以 `(activeAppID,index,low,high)` 调用 Steam 的 `TriggerVibration` RPC。
-activeAppID 取同版本 client cache `+0x109608`，其原始 getter 为
-`0x13861c4f0`，日志标明缓存来源；Steam 仍自行检查真实活动配置，不能把
-缓存读回或调用返回当成交付成功。map 在 Input shutdown/user/pipe 释放前销毁。
+初版 activeAppID 取 client cache `+0x109608`，原始 getter 为
+`0x13861c4f0`。**Correction：** §22.29 的真实记录否定了该缓存能代表当前
+设备配置的假设；不能再把它作为可靠的活动配置来源。修正版优先取对应设备
+最近的激活日志，缺失时才使用明确标为未核验的缓存。Steam 仍自行检查真实
+活动配置，日志或调用返回均不证明交付。map 在 Input shutdown/user/pipe 释放前销毁。
 
 `rpc_bridge_evidence` 执行原始 `0x1388b7240`，验证 appID=769、index=4、
 A=0x1234/B=0xabcd 的序列化，方法 ID 为 0xbba86a5a；其 buffer/IPC/reply
@@ -2579,3 +2581,38 @@ Steam触觉”时调用，设置持久化属于 Steam 当前手柄偏好，不�
 覆盖开关、非默认 pulse 参数、原生停止及播放中关闭。真实 Steam 初始化、
 设置生效和非零原包交付仍由运行记录与 Switch trace 核验，不能据离线通过
 宣称已启用真实游戏高级反馈。
+
+### 22.29 桌面实测的配置偏差与识别对照
+
+**Evidence：** 用户提供 `desktop-results-20261120-171734.zip`，其中
+`session-20261120-171734-26936.jsonl` 的零 AppID 初始化成功，枚举到
+Switch Pro；普通请求始终使用缓存 769。同期 `controller.txt` 在17:14:08
+记录 controller 0 激活413080，`console_log.txt` 记录该 AppID 加载
+`controller_base/streaming_steamdesktop.vdf`。触觉设置返回 accepted=true 后
+仍有正常 flags=0 原生请求；没有设备回包，用户报告无震动。
+`streaming_log.txt` 记录10.10.10.111的串流。用户明确确认客户端屏幕仍运行，
+采集无响应不能推翻该观察。提供的 ZIP 本身也证明该次退出导出成功，
+原版只有退出后才导出，不能把运行中未找到 ZIP 当成导出失败。
+
+**Conclusion：** 零应用初始化与远程设备枚举已经真实验证；进程缓存769
+与主机设备激活记录不一致。结合 §22.25 的 worker AppID 匹配条件，普通发送
+的配置来源有明确缺陷。原生请求不带这个 AppID，不能用同一原因解释其失败。
+accepted=true 不证明原生路径各项门禁已满足，更不证明设备收到非零包。
+
+修正版读取 Steam `controller.txt` 尾部128KiB中对应 index 最近的
+`Queueing activation`，日志标为 `steam_controller_activation_log`；缺失则
+标为 `client_cache_unverified`。这只是激活请求记录，**不是服务端活动 worker
+的原子读回**，切换瞬间或日志缺失时仍可能不匹配。替身回归分别维护服务端
+配置与进程缓存，覆盖真实记录中的769缓存不变、设备切换413080的情况。
+
+内置识别对照调用固定 DLL owned map `+0x100` 的
+`IdentifyControllerRumbleEffect`（`0x138869b70`），参数为 index，
+方法ID 0x4c9db0fc、尾标识0x51ba1617、bool回复。底层
+`0x138620060` 的 Switch type38 使用 Steam 自带识别反馈，并非游戏原生
+脉冲；其内部识别标志不能用来证明正常游戏门禁已满足。原始 marshaler
+序列化与替身回复已核验；真实识别震动、修正版普通请求交付及原生失败原因
+均不能由离线检查推定。
+
+面板另记录采集地址、请求与 Winsock 错误，窗口内导出会先复制日志快照，
+由独立 PowerShell 收集后打包。快照及无回包场景已用 Win32 替身检查；新增
+PowerShell 导出分支没有在本地 Windows 上执行，不宣称已完成真实运行验收。

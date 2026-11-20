@@ -20,10 +20,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wine-prefix", type=Path, required=True)
-    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_native", "desktop_native_close", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
+    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_native", "desktop_native_close", "desktop_profile_log", "desktop_capture_timeout", "desktop_export", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "tools/run-desktop-panel.ps1",out / "run-desktop-panel.ps1")
     mock = out / "mock-steam"
     mock.mkdir(exist_ok=True)
     gcc = "x86_64-w64-mingw32-gcc"
@@ -47,6 +48,7 @@ def main():
     server.bind(("127.0.0.1", 28772))
     server.settimeout(.1)
     stopped = threading.Event()
+    drop_replies = False
 
     def serve():
         current_profile = dict(low_hz=160, high_hz=320, peak=.5571934, routing=0)
@@ -55,6 +57,7 @@ def main():
                 data, peer = server.recvfrom(256)
             except TimeoutError:
                 continue
+            if drop_replies: continue
             if data == b"rumble-config" or data.startswith(b"rumble-config "):
                 fields = data.decode().split()
                 if len(fields) == 5:
@@ -76,6 +79,7 @@ def main():
     report = []
     try:
         for case in args.cases:
+            drop_replies = case=="desktop_capture_timeout"
             case_env=dict(environment, NSL_PANEL_CASE=case)
             if case=="init_retry":case_env["NSL_PANEL_INIT_FAIL_ONCE"]="1"
             if case=="user_retry":case_env["NSL_PANEL_USER_FAIL_ONCE"]="1"
@@ -97,6 +101,8 @@ def main():
             assert rows[-1]["stage"] == "end" and rows[-1]["stopped"] and rows[-1]["capture_joined"]
             requests = [r for r in rows if r["stage"] == "request"]
             assert requests and requests[-1]["low"] == requests[-1]["high"] == 0
+            if case=="desktop_capture_timeout": assert any(r["stage"]=="capture_no_reply" for r in rows)
+            if case=="desktop_export": assert any(r["stage"]=="export_snapshot" for r in rows)
             if case == "steam":
                 assert any(r["route"] == "steaminput" and r["low"] == 789 and r["high"] == 23456 for r in requests)
             if case == "capture":

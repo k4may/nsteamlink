@@ -14,6 +14,8 @@ static void *desktop_slots[142];
 static object desktop={desktop_slots};
 static unsigned char desktop_cache[0x10960c];
 static bool desktop_opened, haptics_enabled;
+static uint32_t server_active=769;
+static unsigned identify_calls;
 static unsigned native_calls,native_flags,native_on,native_off,native_repeat;
 static uint64_t handle=0x123456789;
 static unsigned low,high,calls,mask=1,empty,type=10,shutdown_count;
@@ -22,14 +24,15 @@ static unsigned pipe_attempts;
 static unsigned user_attempts;
 __declspec(dllexport) uint64_t NslMockRead(unsigned which) {
     switch(which) { case 0:return low; case 1:return high; case 2:return calls;
-        case 3:return handle; case 4:return shutdown_count;case 5:return native_calls;case 6:return native_flags;case 7:return native_on;case 8:return native_off;case 9:return native_repeat;case 10:return haptics_enabled; default:return 0; }
+        case 3:return handle; case 4:return shutdown_count;case 5:return native_calls;case 6:return native_flags;case 7:return native_on;case 8:return native_off;case 9:return native_repeat;case 10:return haptics_enabled;case 11:return identify_calls; default:return 0; }
 }
 __declspec(dllexport) void NslMockSet(unsigned which,uint64_t n) {
     if(which==0) mask=(unsigned)n;
     else if(which==1) empty=(unsigned)n;
     else if(which==2) handle=n;
     else if(which==3) type=(unsigned)n;
-    else if(which==4) {uint32_t appid=(uint32_t)n;memcpy(desktop_cache+0x109608,&appid,4);}
+    else if(which==4) {uint32_t appid=(uint32_t)n;memcpy(desktop_cache+0x109608,&appid,4);server_active=appid;}
+    else if(which==5) server_active=(uint32_t)n;
 }
 __declspec(dllexport) DWORD WINAPI XInputGetState(DWORD index,XINPUT_STATE *value) {
     memset(value,0,sizeof(*value));
@@ -80,9 +83,10 @@ static bool desktop_details_mock(void *self,unsigned index,unsigned char *out) {
 }
 static void desktop_rumble_mock(void *self,uint32_t appid,unsigned index,uint16_t a,uint16_t b) {
     uint32_t active;memcpy(&active,desktop_cache+0x109608,4);
-    assert(self==&desktop && desktop_opened && index==0 && appid==active);
-    low=a;high=b;++calls;
+    assert(self==&desktop && desktop_opened && index==0 && appid==server_active);
+    (void)active;low=a;high=b;++calls;
 }
+static bool desktop_identify_mock(void *self,unsigned index) {assert(self==&desktop && index==0);++identify_calls;return true;}
 static bool desktop_haptics_mock(void *self,unsigned index,bool enabled) {
     assert(self==&desktop && desktop_opened && index==0);haptics_enabled=enabled;return true;
 }
@@ -95,7 +99,7 @@ __declspec(dllexport) void *NslMockDesktop(void **controller) {
     char env[32];GetEnvironmentVariableA("SteamAppId",env,32);assert(!strcmp(env,"0"));
     GetEnvironmentVariableA("SteamGameId",env,32);assert(!strcmp(env,"0"));
     uint32_t appid=769;memcpy(desktop_cache+0x109608,&appid,4);*controller=desktop_cache;
-    desktop_slots[0x468/8]=desktop_haptics_mock;desktop_slots[0x2a8/8]=desktop_pulse_mock;desktop_slots[0]=desktop_destroy;desktop_slots[0x338/8]=desktop_details_mock;desktop_slots[0x2b8/8]=desktop_rumble_mock;
+    desktop_slots[0x100/8]=desktop_identify_mock;desktop_slots[0x468/8]=desktop_haptics_mock;desktop_slots[0x2a8/8]=desktop_pulse_mock;desktop_slots[0]=desktop_destroy;desktop_slots[0x338/8]=desktop_details_mock;desktop_slots[0x2b8/8]=desktop_rumble_mock;
     desktop_opened=true;return &desktop;
 }
 static bool input_shutdown(void *self) {

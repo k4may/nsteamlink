@@ -29,6 +29,7 @@
 #include <string.h>
 #include <math.h>
 #include "haptics-panel-state.h"
+#include "steam-active-config.h"
 
 #define METHOD(o, slot, type) ((type)((*(void ***)(o))[(slot) / 8]))
 #define UPDATE_CAPTURE (WM_APP + 1)
@@ -36,7 +37,7 @@
 enum { ID_ROUTE=100, ID_TARGET, ID_LOW, ID_HIGH, ID_LOW_EDIT, ID_HIGH_EDIT,
        ID_MODE, ID_ON, ID_OFF, ID_LIMIT, ID_PLAY, ID_STOP, ID_ADDRESS, ID_CONNECT,
        ID_LOGS, ID_ZERO, ID_WEAK, ID_MID, ID_FULL, ID_LOW_HZ, ID_HIGH_HZ,
-       ID_PEAK, ID_ROUTING, ID_APPLY, ID_320, ID_640, ID_HAPTICS_ON, ID_HAPTICS_OFF };
+       ID_PEAK, ID_ROUTING, ID_APPLY, ID_320, ID_640, ID_HAPTICS_ON, ID_HAPTICS_OFF, ID_IDENTIFY };
 typedef DWORD (WINAPI *get_state_fn)(DWORD, XINPUT_STATE *);
 typedef DWORD (WINAPI *set_state_fn)(DWORD, XINPUT_VIBRATION *);
 typedef void *(*create_fn)(const char *, int *);
@@ -71,10 +72,12 @@ static bool native_controls;
 static void *desktop_controller, *desktop_map;
 static uintptr_t desktop_base;
 static char desktop_sha[65];
+static wchar_t steam_root[MAX_PATH];
 typedef void *(*desktop_factory_fn)(int, int);
 typedef void *(*desktop_destroy_fn)(void *, unsigned);
 typedef bool (*desktop_details_fn)(void *, unsigned, unsigned char *);
 typedef void (*desktop_rumble_fn)(void *, uint32_t, unsigned, uint16_t, uint16_t);
+typedef bool (*desktop_identify_fn)(void *, unsigned);
 typedef bool (*desktop_haptics_fn)(void *, unsigned, bool);
 typedef void (*desktop_pulse_fn)(void *, unsigned, int, uint16_t, uint16_t, uint16_t, unsigned);
 static const char *route_name(unsigned r) { return r==3?"steam_native_pulse_rpc":r==2?"steam_desktop_rpc":r==1?"steaminput":"xinput"; }
@@ -205,7 +208,8 @@ static bool desktop_open(const wchar_t *path) {
     if((uintptr_t)METHOD(desktop_map,0x338,desktop_details_fn)!=desktop_base+0x77e0b0 ||
        (uintptr_t)METHOD(desktop_map,0x2b8,desktop_rumble_fn)!=desktop_base+0x8b7240 ||
        (uintptr_t)METHOD(desktop_map,0x2a8,desktop_pulse_fn)!=desktop_base+0x8b6b60 ||
-       (uintptr_t)METHOD(desktop_map,0x468,desktop_haptics_fn)!=desktop_base+0x895660) {desktop_close();return false;}
+       (uintptr_t)METHOD(desktop_map,0x468,desktop_haptics_fn)!=desktop_base+0x895660 ||
+       (uintptr_t)METHOD(desktop_map,0x100,desktop_identify_fn)!=desktop_base+0x869b70) {desktop_close();return false;}
     desktop_ready=true;return true;
 }
 static bool desktop_details(unsigned index,uint64_t *handle,uint32_t *type) {
@@ -214,14 +218,44 @@ static bool desktop_details(unsigned index,uint64_t *handle,uint32_t *type) {
     memcpy(handle,info+0x20,8);memcpy(type,info+0x34,4);
     return *handle!=0;
 }
+static uint32_t desktop_request_appid(unsigned index,const char **source) {
+    uint32_t active=0;*source="client_cache_unverified";
+    memcpy(&active,(unsigned char *)desktop_controller+0x109608,4);
+    wchar_t path[MAX_PATH];swprintf(path,MAX_PATH,L"%ls\\logs\\controller.txt",steam_root);
+    HANDLE file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);
+    if(file!=INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER size,offset;
+        if(GetFileSizeEx(file,&size)) {
+            offset.QuadPart=size.QuadPart>131072?size.QuadPart-131072:0;
+            char *text=malloc(131073);DWORD bytes=0;
+            if(text && SetFilePointerEx(file,offset,NULL,FILE_BEGIN) && ReadFile(file,text,131072,&bytes,NULL)) {
+                text[bytes]=0;
+                if(nsl_steam_last_activation(text,index,&active)) *source="steam_controller_activation_log";
+            }
+            free(text);
+        }
+        CloseHandle(file);
+    }
+    return active;
+}
+static bool desktop_identify(uint64_t handle) {
+    for(unsigned index=0;index<16;++index) {
+        uint64_t actual=0;uint32_t type=0;
+        if(!desktop_details(index,&actual,&type) || actual!=handle || type!=38) continue;
+        bool accepted=METHOD(desktop_map,0x100,desktop_identify_fn)(desktop_map,index);
+        log_event("\"stage\":\"steam_identify\",\"handle\":%llu,\"index\":%u,\"accepted\":%s,\"game_api_test\":false,\"delivery_verified\":false",(unsigned long long)handle,index,accepted?"true":"false");
+        return accepted;
+    }
+    return false;
+}
 static bool desktop_send(uint64_t handle,uint16_t low,uint16_t high) {
     for(unsigned index=0;index<16;++index) {
         uint64_t actual=0;uint32_t type=0;
         if(!desktop_details(index,&actual,&type) || actual!=handle || type!=38) continue;
-        uint32_t active;memcpy(&active,(unsigned char *)desktop_controller+0x109608,4);
+        const char *context_source;uint32_t active=desktop_request_appid(index,&context_source);
         METHOD(desktop_map,0x2b8,desktop_rumble_fn)(desktop_map,active,index,low,high);
-        log_event("\"stage\":\"desktop_dispatch\",\"handle\":%llu,\"index\":%u,\"active_appid\":%lu,\"active_appid_source\":\"steam_client_cache\",\"low\":%u,\"high\":%u,\"delivery_verified\":false",
-                  (unsigned long long)handle,index,(unsigned long)active,low,high);
+        log_event("\"stage\":\"desktop_dispatch\",\"handle\":%llu,\"index\":%u,\"active_appid\":%lu,\"active_appid_source\":\"%s\",\"low\":%u,\"high\":%u,\"delivery_verified\":false",
+                  (unsigned long long)handle,index,(unsigned long)active,context_source,low,high);
         return true;
     }
     return false;
@@ -289,6 +323,7 @@ static void steam_open(void) {
                         RRF_RT_REG_SZ, NULL, root, &size) != ERROR_SUCCESS) return;
     }
     steam_init_step=2;
+    wcscpy(steam_root,root);
     if (wcslen(root) > MAX_PATH - 32) return;
     swprintf(path, MAX_PATH, L"%ls\\steamclient64.dll", root);
     steam_init_step=3;
@@ -540,11 +575,13 @@ static DWORD WINAPI collect(LPVOID unused) {
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     struct sockaddr_in peer = {0}; peer.sin_family = AF_INET; peer.sin_port = htons(28772);
     DWORD timeout = 150;
-    uint64_t after = 0, next_stats = 0;
+    uint64_t after = 0, next_stats = 0, last_error_log = 0;
+    unsigned capture_errors=0;
     bool connected = sock != INVALID_SOCKET && InetPtonA(AF_INET, capture_ip, &peer.sin_addr) == 1 &&
         !setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout)) &&
         !setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout)) &&
         !connect(sock, (const struct sockaddr *)&peer, sizeof(peer));
+    log_event("\"stage\":\"capture_begin\",\"address\":\"%s\",\"port\":28772,\"socket_ready\":%s",capture_ip,connected?"true":"false");
     if(connected) profile_exchange(&peer,NULL,0);
     if (connected) while (WaitForSingleObject(capture_stop, 20) == WAIT_TIMEOUT) {
         EnterCriticalSection(&data_lock);
@@ -559,8 +596,13 @@ static DWORD WINAPI collect(LPVOID unused) {
         if (send(sock, command, (int)strlen(command), 0) != (int)strlen(command)) continue;
         int n = recv(sock, reply, sizeof(reply) - 1, 0);
         if (n <= 0) {
+            int error=WSAGetLastError();++capture_errors;
+            if(!last_error_log || now_ms()-last_error_log>=1000) {
+                log_event("\"stage\":\"capture_no_reply\",\"address\":\"%s\",\"query\":\"%s\",\"winsock_error\":%d,\"failures\":%u",capture_ip,command,error,capture_errors);
+                last_error_log=now_ms();
+            }
             EnterCriticalSection(&data_lock);
-            wcscpy(capture_status, L"Switch 采集暂无回应：请运行正常客户端并连接 Steam。发送控制仍可使用。");
+            wcscpy(capture_status, L"Steam手柄与采集是独立链路：Switch UDP 28772暂无回包，错误已记录。");
             LeaveCriticalSection(&data_lock);
             PostMessageW(window, UPDATE_CAPTURE, 0, 0); continue;
         }
@@ -604,6 +646,28 @@ static void start_capture(void) {
     capture_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (capture_stop) capture_thread = CreateThread(NULL, 0, collect, NULL, 0, NULL);
     if (!capture_thread) { stop_capture(); SetWindowTextW(receive_label, L"自动采集启动失败。"); }
+}
+static void export_records(void) {
+    wchar_t script[MAX_PATH],snapshot[MAX_PATH],args[3*MAX_PATH+160];
+    if(!GetModuleFileNameW(NULL,script,MAX_PATH)) return;
+    wchar_t *slash=wcsrchr(script,L'\\');
+    if(!slash || (size_t)(slash-script)>MAX_PATH-32) return;
+    wcscpy(slash+1,L"run-desktop-panel.ps1");
+    swprintf(snapshot,MAX_PATH,L"%ls\\export-%lu-%llu.jsonl",log_folder,(unsigned long)GetCurrentProcessId(),(unsigned long long)now_ms());
+    EnterCriticalSection(&data_lock);if(log_file) fflush(log_file);
+    bool copied=log_file && CopyFileW(log_path,snapshot,FALSE);LeaveCriticalSection(&data_lock);
+    if(!copied || GetFileAttributesW(script)==INVALID_FILE_ATTRIBUTES) {
+        ShellExecuteW(window,L"open",log_folder,NULL,NULL,SW_SHOWNORMAL);
+        set_status(L"已打开原始记录目录；session-*.jsonl可直接分析。");return;
+    }
+    swprintf(args,sizeof(args)/sizeof(args[0]),L"-NoProfile -ExecutionPolicy Bypass -File \"%ls\" -ExportOnly -SessionPath \"%ls\" -OpenFolder",script,snapshot);
+#ifdef NSL_PANEL_TEST
+    log_event("\"stage\":\"export_snapshot\",\"ok\":true");
+#else
+    if((INT_PTR)ShellExecuteW(window,L"open",L"powershell.exe",args,NULL,SW_SHOWNORMAL)<=32)
+        ShellExecuteW(window,L"open",log_folder,NULL,NULL,SW_SHOWNORMAL);
+#endif
+    set_status(L"正在导出记录，完成后自动选中ZIP；无需关闭面板。");
 }
 static void save_settings(void) {
     wchar_t value[64];
@@ -671,10 +735,11 @@ static void create_controls(void) {
     status_label=control(L"STATIC",L"等待手柄连接。",0,20,475,685,35,0);
     label(L"Switch 地址",20,525,110); address_edit=control(L"EDIT",L"10.10.10.111",WS_BORDER|WS_TABSTOP,135,518,190,28,ID_ADDRESS);
     control(L"BUTTON",L"连接自动采集",WS_TABSTOP,345,516,180,32,ID_CONNECT);
-    control(L"BUTTON",L"打开记录文件夹",WS_TABSTOP,540,516,165,32,ID_LOGS);
+    control(L"BUTTON",L"导出 / 打开记录",WS_TABSTOP,540,516,165,32,ID_LOGS);
     receive_label=control(L"STATIC",L"自动记录 Switch 实际收到的命令。",0,20,560,685,32,0);
     output_label=control(L"STATIC",L"本机输出参数将在这里显示。",0,20,600,685,65,0);
-    label(L"停止 / 空格 / Esc / 关闭归零",20,678,360);
+    control(L"BUTTON",L"Steam识别手柄",WS_TABSTOP,20,670,170,32,ID_IDENTIFY);
+    label(L"空格 / Esc 归零",205,678,175);
     control(L"BUTTON",L"启用Steam触觉",WS_TABSTOP,390,670,150,32,ID_HAPTICS_ON);
     control(L"BUTTON",L"关闭Steam触觉",WS_TABSTOP,550,670,155,32,ID_HAPTICS_OFF);
     uint16_t low=(uint16_t)GetPrivateProfileIntW(L"Panel",L"Low",6554,settings_path);
@@ -740,6 +805,12 @@ static LRESULT CALLBACK procedure(HWND h,UINT msg,WPARAM w,LPARAM l) {
             else if(id==ID_FULL) levels(65535,65535);
             else if(id==ID_APPLY) apply_profile();
             else if(id==ID_320 || id==ID_640) {SetWindowTextW(high_hz_edit,id==ID_320?L"320":L"640");apply_profile();}
+            else if(id==ID_IDENTIFY) {
+                stop_output("identify");
+                if(!target_count || chosen.route<2 || !desktop_ready) set_status(L"先选择桌面直连中的Switch Pro。");
+                else if(desktop_identify(chosen.id)) set_status(L"已请求Steam内置识别反馈；这是诊断对照，不代表游戏高级震动已启用。");
+                else set_status(L"Steam未接受识别反馈请求，结果已记录。");
+            }
             else if(id==ID_HAPTICS_ON || id==ID_HAPTICS_OFF) {
                 stop_output("haptics_setting_change");
                 if(!target_count || chosen.route<2 || !desktop_ready) set_status(L"先选择桌面直连中的Switch Pro，再修改Steam触觉开关。");
@@ -748,7 +819,7 @@ static LRESULT CALLBACK procedure(HWND h,UINT msg,WPARAM w,LPARAM l) {
                 else set_status(L"Steam未接受触觉设置请求；失败结果已记录。");
             }
             else if(id==ID_CONNECT) start_capture();
-            else if(id==ID_LOGS) ShellExecuteW(h,L"open",log_folder,NULL,NULL,SW_SHOWNORMAL);
+            else if(id==ID_LOGS) export_records();
         }
         return 0;
     }
