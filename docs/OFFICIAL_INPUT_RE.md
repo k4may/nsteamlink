@@ -2394,3 +2394,66 @@ DLL，不借用别的游戏AppID或改变设备上报；记录独立pipe/user值
 **Boundary：** 原日志step5未区分pipe或user，第一次连接失败的底层原因没有
 由此确定。修复失败状态永久沿用的代码，不据此宣称真实Steam API连接已恢复；
 与用户已经确认的XInput远程震动交付分开记录。
+
+### 22.24 Steam Input 测试源的成功前提与快捷方式身份
+
+**Correction：** 撤回“从 Steam 库启动面板，即具备 Steam Input API 使用条件”
+的隐含前提。§22.23 的重试只修复永久沿用失败状态，不能建立缺失的应用访问
+条件；`GetControllerForGamepadIndex` 也依赖已初始化的同一接口，不能绕过
+初始化或进程配置关联。用户反馈新版仍无手柄，是修复未解决实际问题的证据，
+不能再把它描述成已恢复。该反馈本身不包含新版失败阶段的机器日志。
+
+**Evidence / 启动身份：** 原始 `session-20261120-151633-20776.jsonl`
+的 `SteamAppId=3586707621 (0xd5c8d0a5)`，
+`SteamGameId=15404791932542517248 (0xd5c8d0a502000000)`。
+按 Valve SDK 的 [CGameID 定义](https://github.com/ValveSoftware/Proton/blob/proton_11.0/lsteamclient/steamworks_sdk_163/steamclientpublic.h)，
+这是 type=2 的 shortcut，低 24 位 AppID=0，高 32 位为快捷方式标识。
+它是 Steam 正常提供的非 Steam 启动上下文，不能仅因存在或在库里显示，就
+当作已注册、可访问 Steamworks 的商店 AppID。面板保留这些环境变量，不曾
+将两者互相替换。
+
+**Evidence / 客户端连接：** 对 §22.11 同一 DLL 的原始指令复查：
+`0x1389a68e1..0x1389a6905` 将环境变量 `SteamAppId` 解析至 engine `+0x148`；
+`ConnectToGlobalUser` 实现 `0x1389a7170` 的
+`0x1389a7326..0x1389a7375` 将该值交给接口 `+0x90` 检查。
+返回 0 且原 AppID 非 0 时，存在 `ConnectToGlobalUser: Steam denied appID %u`
+分支，释放关联并返回 0；错误文本地址为 `0x13938f9a0`。这证明连接失败
+不能只解释为启动竞态/全局用户尚未就绪，不证明该机器当时必然触发了这个
+分支。原日志 step5 合并了建 pipe 和连 user 的失败，不能补造细分结果。
+
+Valve 的 [SteamAPI 初始化文档](https://partner.steamgames.com/doc/api/steam_api#SteamAPI_Init)
+列出客户端运行、应用身份、账户访问许可、应用设置及相同 OS 用户/权限上下文
+等失败条件。手工通过 `SteamClient023` 建连接不等于免除这些前提；反过来，
+不能仅凭未调用 `SteamAPI_Init` 就断定低层连接方式必然错误。
+
+**Evidence / 接口与配置：** [ISteamInput 文档](https://partner.steamgames.com/doc/api/isteaminput?l=english#GetConnectedControllers)
+要求设备对 Steam Input 启用，且枚举前先运行 `RunFrame` 或 callbacks。
+面板已在 16ms timer 调用 `RunFrame(true)`，因此首次扫描早于第一帧不能
+解释持续空列表。§22.14 的原始实现还证明枚举按进程 GameID/应用关联过滤，
+不是“主机全局有设备就一定返回”。需要区分以下条件：
+
+| 条件 | 能证明它的证据 | 不能替代它的现象 |
+|---|---|---|
+| Steam API 客户端连接成立 | 非零 pipe/user，取得接口 | 存在 Steam 启动环境变量或 XInput 能震动 |
+| Input 已初始化并推进 | Init、RunFrame 实际执行 | DLL 加载成功或 mock 返回 true |
+| 当前应用获得设备配置关联 | 同一应用上下文的有效 Input handle 与配置记录 | 桌面/UI/另一游戏能枚举，或其他 AppID 的旧探针成功 |
+| 请求确实经远程设备输出 | 真实 handle 的请求与 Switch 收包/输出相对应 | API 调用返回、UI 列表非空 |
+
+原来的 `user_retry` mock 故意让第二次连接成功，`empty_public` mock 直接
+返回预设的 XInput 关联 handle；它们只能验证代码如何处理这些返回值，
+不能验证 Steam 接受快捷方式身份或将其配置关联到远程设备。这是既有测试
+范围的缺口，增加同类 mock 次数无法弥补。
+
+**Conclusion：** 已确认面板测试设计混淆了非 Steam 游戏的 XInput 兼容路径
+与 Steamworks API 路径；不能用前者的成功推导后者成功，也没有证据据此
+改动 Switch 上报。成功必须同时满足上述连接、推进、应用关联和远程输出
+条件。普通 `TriggerVibration` 本身仍只传两路力度，不会因为换成 Steam Input
+调用就新增载波频率。动作 manifest 用于原生动作定义/配置，不是普通双路
+震动的通用强制前提，不能无依据再增加这道门槛。
+
+**Hypothesis：** 当前快捷方式 AppID 在 API 连接检查中被拒绝，是与现有身份
+及 DLL 分支相符的候选原因；尚缺真实拒绝信息，不能宣称已唯一定位，也不能
+宣称所有非 Steam 程序都无法使用该接口。有效 SDK 应用上下文仍须与实际
+输入配置匹配，换成某个有许可的 AppID、改能力位或继续重试，均不自动满足
+这些条件。真实原因应从主机连接错误和同一进程的配置关联确定，而非通过
+反复更换 Switch 固件或借用另一游戏的成功结果推断。
