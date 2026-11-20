@@ -23,7 +23,17 @@ static void panel_self_test(void) {
     if(!wcsncmp(scenario,L"desktop",7)) {
         assert(desktop_mode && desktop_ready && steam_user && target_count==1 && chosen.route==2);
         stop_capture();levels(789,23456);click(ID_PLAY);tick();assert(sr(0)==789 && sr(1)==23456);
-        if(!wcscmp(scenario,L"desktop_app_change")) {
+        if(!wcscmp(scenario,L"desktop_native") || !wcscmp(scenario,L"desktop_native_close")) {
+            unsigned ordinary_on=state.on_ms,ordinary_off=state.off_ms;
+            choose_route(3);assert(chosen.route==3 && native_controls && !state.active && !sr(0));
+            click(ID_HAPTICS_ON);assert(sr(10)==1);
+            SetWindowTextW(on_edit,L"250");SetWindowTextW(off_edit,L"750");SetWindowTextW(limit_edit,L"4");
+            click(ID_PLAY);assert(native_active && sr(5)==2 && sr(6)==0 && sr(7)==250 && sr(8)==750 && sr(9)==4);
+            if(!wcscmp(scenario,L"desktop_native_close")) {log_event("\"stage\":\"ui_test_passed\"");PostMessageW(window,WM_CLOSE,0,0);return;}
+            click(ID_STOP);assert(!native_active && sr(5)==4 && sr(6)==2 && !sr(7));
+            click(ID_HAPTICS_OFF);assert(sr(10)==0);
+            choose_route(2);assert(!native_controls && chosen.route==2 && state.on_ms==ordinary_on && state.off_ms==ordinary_off);
+        } else if(!wcscmp(scenario,L"desktop_app_change")) {
             ss(4,413080);state.last_send_ms=0;tick();assert(sr(0)==789);
         } else if(!wcscmp(scenario,L"desktop_disconnect")) {
             ss(0,0);last_scan=0;tick();assert(!state.active && !target_count);

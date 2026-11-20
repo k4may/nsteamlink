@@ -610,10 +610,16 @@ ctest --test-dir build/desktop -R '^nsl-haptics-experience$' --output-on-failure
 
 ### Steam 实时震动控制面板（Windows）
 
-`tools/steam-haptics-panel-win.c` 是可从Steam库启动的Windows x64程序。
-将构建包中的EXE添加为“非Steam游戏”，Switch正常连接主机后从Steam库启动。
-默认用游戏通用的`XInputSetState`，可切换公开`SteamInput006::TriggerVibration`；
-继承启动上下文，不借用其他游戏AppID，也不读取/修改Steam私有门禁。
+`tools/steam-haptics-panel-win.c` 是 Windows x64 程序。双击包中的
+`Start-Desktop-Panel.cmd` 使用版本绑定的 Steam 桌面内部 IPC，无需添加游戏。
+“Steam原生脉冲”模式可显式开/关 Steam 当前手柄的触觉偏好，再按微秒持续、
+间隔和重复次数请求双侧反馈；A/B和本地Hz在此模式禁用。设置由Steam保存，
+需要时点击“关闭Steam触觉”；接受请求不等于真实原生包已经交付。
+关闭窗口自动打包本次日志，原生非零请求不使用强制输出标志。
+
+普通游戏对照仍可将 EXE 添加为非 Steam 游戏并从库启动，默认使用
+`XInputSetState`，可切换公开`SteamInput006::TriggerVibration`；继承游戏
+上下文，不借用其他游戏AppID。桌面内部诊断和公开游戏API结果分别记录。
 不依赖虚拟手柄驱动，不携带Valve DLL，不改变客户端设备身份/能力。
 
 两路0..65535力度可拖动或精确输入，支持持续/单次/重复脉冲；开关时间及

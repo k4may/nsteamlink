@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--wine-prefix", type=Path, required=True)
-    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
+    parser.add_argument("--cases", nargs="+", default=["close", "focus", "disconnect", "invalid", "steam", "init_retry", "user_retry", "empty_public", "pulse", "capture", "frequency", "desktop", "desktop_native", "desktop_native_close", "desktop_app_change", "desktop_disconnect", "desktop_handle_change"])
     args = parser.parse_args()
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)

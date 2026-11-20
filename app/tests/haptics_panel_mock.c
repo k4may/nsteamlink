@@ -10,10 +10,11 @@
 typedef struct object { void **vtable; } object;
 static void *client_slots[13], *input_slots[46];
 static object client={client_slots},input={input_slots};
-static void *desktop_slots[104];
+static void *desktop_slots[142];
 static object desktop={desktop_slots};
 static unsigned char desktop_cache[0x10960c];
-static bool desktop_opened;
+static bool desktop_opened, haptics_enabled;
+static unsigned native_calls,native_flags,native_on,native_off,native_repeat;
 static uint64_t handle=0x123456789;
 static unsigned low,high,calls,mask=1,empty,type=10,shutdown_count;
 static bool initialized,shutdown_done,released;
@@ -21,7 +22,7 @@ static unsigned pipe_attempts;
 static unsigned user_attempts;
 __declspec(dllexport) uint64_t NslMockRead(unsigned which) {
     switch(which) { case 0:return low; case 1:return high; case 2:return calls;
-        case 3:return handle; case 4:return shutdown_count; default:return 0; }
+        case 3:return handle; case 4:return shutdown_count;case 5:return native_calls;case 6:return native_flags;case 7:return native_on;case 8:return native_off;case 9:return native_repeat;case 10:return haptics_enabled; default:return 0; }
 }
 __declspec(dllexport) void NslMockSet(unsigned which,uint64_t n) {
     if(which==0) mask=(unsigned)n;
@@ -69,7 +70,8 @@ static int input_type(void *self,uint64_t id) { assert(self==&input && id==handl
 static uint32_t input_remote(void *self,uint64_t id) { assert(self==&input && id==handle);return 1; }
 static uint64_t index_handle(void *self,int index) { assert(self==&input);return index==0?handle:0; }
 static void *desktop_destroy(void *self,unsigned flags) {
-    assert(self==&desktop && flags==1 && desktop_opened && !low && !high);desktop_opened=false;return NULL;
+    assert(self==&desktop && flags==1 && desktop_opened && !low && !high);
+    assert(!native_calls || (native_flags==2 && !native_on));desktop_opened=false;return NULL;
 }
 static bool desktop_details_mock(void *self,unsigned index,unsigned char *out) {
     assert(self==&desktop && desktop_opened);
@@ -81,11 +83,19 @@ static void desktop_rumble_mock(void *self,uint32_t appid,unsigned index,uint16_
     assert(self==&desktop && desktop_opened && index==0 && appid==active);
     low=a;high=b;++calls;
 }
+static bool desktop_haptics_mock(void *self,unsigned index,bool enabled) {
+    assert(self==&desktop && desktop_opened && index==0);haptics_enabled=enabled;return true;
+}
+static void desktop_pulse_mock(void *self,unsigned index,int side,uint16_t on,uint16_t off,uint16_t repeat,unsigned flags) {
+    assert(self==&desktop && desktop_opened && index==0 && (side==0 || side==1));
+    assert((flags==0 && haptics_enabled) || (flags==2 && on==0 && off==0 && repeat==0));
+    ++native_calls;native_flags=flags;native_on=on;native_off=off;native_repeat=repeat;
+}
 __declspec(dllexport) void *NslMockDesktop(void **controller) {
     char env[32];GetEnvironmentVariableA("SteamAppId",env,32);assert(!strcmp(env,"0"));
     GetEnvironmentVariableA("SteamGameId",env,32);assert(!strcmp(env,"0"));
     uint32_t appid=769;memcpy(desktop_cache+0x109608,&appid,4);*controller=desktop_cache;
-    desktop_slots[0]=desktop_destroy;desktop_slots[0x338/8]=desktop_details_mock;desktop_slots[0x2b8/8]=desktop_rumble_mock;
+    desktop_slots[0x468/8]=desktop_haptics_mock;desktop_slots[0x2a8/8]=desktop_pulse_mock;desktop_slots[0]=desktop_destroy;desktop_slots[0x338/8]=desktop_details_mock;desktop_slots[0x2b8/8]=desktop_rumble_mock;
     desktop_opened=true;return &desktop;
 }
 static bool input_shutdown(void *self) {
