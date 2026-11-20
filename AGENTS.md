@@ -7,6 +7,7 @@
 - Deliver when the requested behavior and the applicable focused checks pass. Do not delay delivery for repeated audits, expanded hypothetical cases, lengthy documentation, or serial Issue updates. Record material evidence once, concisely; state unavailable runtime evidence without claiming success or blocking independently usable work.
 - Read the applicable rules and relevant source/reference sections; do not reread all kickoff/decision documents every session. Keep the active feature or repair in scope while improving workflow.
 - Documentation-only edits need a diff/content check, not code builds or runtime tests. PC-tool-only edits do not require rebuilding or redeploying the Switch client. Keep runtime diagnostic parameters adjustable rather than rebuilding for each value.
+- Build the Switch client with `make switch` / `make switch-diag`; deploy with `make switch-deploy SWITCH_IP=<confirmed address>`. The deploy entry builds `nsteamlink_nro`, snapshots it with its hash, and sends that same file. The CMake `nsteamlink` target only updates ELF; never use it as evidence that the runnable NRO changed or manually pair it with a pre-existing NRO.
 
 ## Evidence Discipline
 

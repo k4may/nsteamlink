@@ -9,3 +9,5 @@ void sl_log_finish(void);
 bool sl_log_copy_tail(char *out, size_t capacity, bool previous);
 unsigned sl_log_drop_count(void);
 uint16_t sl_log_http_port(void);
+/* Actor publishes numeric health only; HTTP never borrows session pointers. */
+void sl_log_runtime_status(int udp_fd, int udp_error, uint64_t received, uint64_t replied);

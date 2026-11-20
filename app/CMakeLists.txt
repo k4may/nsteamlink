@@ -322,14 +322,15 @@ if(NSL_PLATFORM STREQUAL "desktop")
     add_dependencies(nsl-diagnostic-log-tests nsl_identity)
     target_include_directories(nsl-diagnostic-log-tests PRIVATE src platforms/common ${NSL_IDENTITY_DIR})
     target_compile_definitions(nsl-diagnostic-log-tests PRIVATE NSL_DIAGNOSTICS=1
-        NSL_DIAGNOSTIC_PORT=0 NSL_DIAGNOSTIC_SEGMENT_BYTES=4096)
+        NSL_DIAGNOSTIC_PORT=0 NSL_DIAGNOSTIC_SEGMENT_BYTES=4096 NSL_RUMBLE_TEST=1
+        NSL_HAPTIC_DIAGNOSTIC_TEST=1)
     target_compile_options(nsl-diagnostic-log-tests PRIVATE -Wall -Wextra -UNDEBUG)
     target_link_libraries(nsl-diagnostic-log-tests PRIVATE Threads::Threads)
     foreach(symbol accept fdopen fopen stat)
         target_link_options(nsl-diagnostic-log-tests PRIVATE "-Wl,--wrap=${symbol}")
     endforeach()
     add_test(NAME nsl-diagnostic-log COMMAND nsl-diagnostic-log-tests)
-    set_tests_properties(nsl-diagnostic-log PROPERTIES TIMEOUT 20)
+    set_tests_properties(nsl-diagnostic-log PROPERTIES TIMEOUT 30)
     add_executable(nsl-lan-transport-tests tests/test_lan_transport.c)
     target_include_directories(nsl-lan-transport-tests PRIVATE
         ${CMAKE_SOURCE_DIR}/third_party/ihslib/src)

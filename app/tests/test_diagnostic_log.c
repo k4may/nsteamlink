@@ -1,10 +1,12 @@
 #include "diagnostic_log.h"
+#include "platform/rumble.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
@@ -16,6 +18,20 @@
 static char root[] = "/tmp/nsl-log-test-XXXXXX";
 static const char *data_root = root;
 static unsigned accept_calls;
+static atomic_bool fail_accept;
+void sl_rumble_get_snapshot(sl_rumble_snapshot *out) {
+    memset(out, 0, sizeof(*out));
+    out->stream[0].ordinary_commands = 7;
+    out->stream[0].native_commands = 3;
+    out->stream[0].commands = 10;
+    out->sends = 11;
+}
+size_t sl_rumble_read_trace(uint64_t after, sl_rumble_trace *out, size_t capacity) {
+    if (after >= 42 || !capacity) return 0;
+    *out = (sl_rumble_trace){.serial=42, .kind=1, .source=SL_HAPTIC_NINTENDO,
+                           .sequence=10, .size=3, .command={13,10,0}};
+    return 1;
+}
 int __real_accept(int fd, struct sockaddr *address, socklen_t *length);
 int __wrap_accept(int fd, struct sockaddr *address, socklen_t *length) {
     /* libnx 4.12.0 bsdAccept dereferences length even without a pending
@@ -23,6 +39,7 @@ int __wrap_accept(int fd, struct sockaddr *address, socklen_t *length) {
     assert(address && length);
     assert(*length == sizeof(struct sockaddr_storage));
     ++accept_calls;
+    if (atomic_exchange(&fail_accept, false)) { errno = EBADF; return -1; }
     return __real_accept(fd, address, length);
 }
 /* Emulate Horizon's refusal to reopen a file that already has a writer.
@@ -68,7 +85,7 @@ void sl_system_log(const char *message) {
     (void)message;
 }
 static unsigned port(void) {
-    for (unsigned i = 0; i < 1000; ++i) {
+    for (unsigned i = 0; i < 3000; ++i) {
         unsigned value = sl_log_http_port();
         if (value)
             return value;
@@ -114,7 +131,7 @@ static unsigned files(char names[][96], unsigned capacity) {
     return count;
 }
 int main(void) {
-    alarm(18);
+    alarm(25);
     assert(mkdtemp(root));
     char path[512], reply[65536], names[128][96];
     snprintf(path, sizeof(path), "%s/stream_diag.log", root);
@@ -134,6 +151,31 @@ int main(void) {
     fputs("DO NOT SERVE", secret);
     fclose(secret);
     assert(sl_log_start());
+    port();
+    sl_log_runtime_status(9, 0, 12, 11);
+    /* No further actor heartbeat: the independent service must still answer. */
+    usleep(100000);
+    get("GET /health HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(strstr(reply, "\"diagnostics\":true") && strstr(reply, "\"runtime_seen\":true") &&
+           strstr(reply, "\"udp_received\":12") && strstr(reply, "\"udp_replied\":11"));
+    get("GET /haptics HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(strstr(reply, "\"ordinary_commands\":7") && strstr(reply, "\"native_commands\":3") &&
+           strstr(reply, "\"session_actor_independent\":true"));
+    get("GET /haptic-trace?after=0 HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(strstr(reply, "200 Response") && strstr(reply, "\"serial\":42") &&
+           strstr(reply, "\"wire\":\"0d0a00\""));
+    get("GET /haptic-trace?after=42 HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(!strcmp(strstr(reply, "\r\n\r\n")+4, "{}"));
+    get("GET /haptic-trace?after=-1 HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(strstr(reply, "400 Response"));
+    /* A dead listening descriptor used to stay dead until the app exited. */
+    atomic_store(&fail_accept, true);
+    for (unsigned i = 0; sl_log_http_port() || atomic_load(&fail_accept); ++i) {
+        assert(i < 2000); usleep(1000);
+    }
+    port();
+    get("GET /health HTTP/1.1\r\nHost: local\r\n\r\n", reply, sizeof(reply));
+    assert(strstr(reply, "200 Response") && strstr(reply, "\"listen_errno\":0"));
     port();
     /* More than the test segment size: records must continue in fresh volumes. */
     for (unsigned i = 0; i < 240; ++i) {

@@ -19,6 +19,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__SWITCH__) || defined(NSL_HAPTIC_DIAGNOSTIC_TEST)
+#include "haptic_debug.h"
+#endif
 
 #ifndef NSL_DIAGNOSTIC_PORT
 #define NSL_DIAGNOSTIC_PORT 28773
@@ -35,6 +38,8 @@ static pthread_t worker;
 static atomic_bool ready, stopping;
 static atomic_uint dropped, http_port;
 static bool started;
+static atomic_uint_fast64_t runtime_tick, udp_received, udp_replied;
+static atomic_int udp_fd = ATOMIC_VAR_INIT(-1), udp_error;
 static char queue[128][224], tail[TAIL_SIZE + 1], previous_tail[TAIL_SIZE + 1];
 static unsigned head, consumed;
 static size_t tail_size;
@@ -80,6 +85,13 @@ unsigned sl_log_drop_count(void) {
 }
 uint16_t sl_log_http_port(void) {
     return atomic_load(&http_port);
+}
+void sl_log_runtime_status(int fd, int error, uint64_t received, uint64_t replied) {
+    atomic_store(&udp_fd, fd);
+    atomic_store(&udp_error, error);
+    atomic_store(&udp_received, received);
+    atomic_store(&udp_replied, replied);
+    atomic_store(&runtime_tick, sl_system_now());
 }
 bool sl_log_copy_tail(char *out, size_t capacity, bool previous) {
     if (!capacity || !atomic_load(&ready) || pthread_mutex_trylock(&lock))
@@ -293,6 +305,34 @@ static void request(log_store *store, http_client *client) {
         response(client, 400, "text/plain", "GET required\n");
         return;
     }
+    if (!strcmp(target, "/health")) {
+        char body[768];
+        uint64_t tick = atomic_load(&runtime_tick), now = sl_system_now();
+        snprintf(body, sizeof(body),
+            "{\"stage\":\"diagnostic_health\",\"version\":\"%s\",\"commit\":\"%s\","
+            "\"diagnostics\":true,\"runtime_seen\":%s,\"runtime_tick_age_ms\":%llu,"
+            "\"udp_bound\":%s,\"udp_errno\":%d,\"udp_received\":%llu,\"udp_replied\":%llu,"
+            "\"listen_errno\":%d,\"storage_errno\":%d,\"snapshot_atomic\":false}",
+            NSL_APP_VERSION, NSL_GIT_COMMIT, tick ? "true" : "false",
+            (unsigned long long)(tick && now >= tick ? now-tick : 0),
+            atomic_load(&udp_fd) >= 0 ? "true" : "false", atomic_load(&udp_error),
+            (unsigned long long)atomic_load(&udp_received), (unsigned long long)atomic_load(&udp_replied),
+            store->listen_error, store->storage_error);
+        response(client, 200, "application/json", body);
+        return;
+    }
+#if defined(__SWITCH__) || defined(NSL_HAPTIC_DIAGNOSTIC_TEST)
+    if (!strcmp(target, "/haptics") || !strncmp(target, "/haptic-trace?after=", 20)) {
+        /* No large reply buffers on libnx's small pthread stack. */
+        char *body = malloc(12288);
+        if (body && sl_haptic_debug_read(target, body, 12288))
+            response(client, 200, "application/x-ndjson", body);
+        else
+            response(client, body ? 400 : 500, "text/plain", "Haptics query failed\n");
+        free(body);
+        return;
+    }
+#endif
     if (!strcmp(target, "/") || !strcmp(target, "/logs")) {
         index_response(store, client, "");
         return;
@@ -414,17 +454,18 @@ static int listen_start(log_store *store) {
     socklen_t length = sizeof(addr);
     if (!getsockname(fd, (struct sockaddr *)&addr, &length))
         atomic_store(&http_port, ntohs(addr.sin_port));
+    store->listen_error = 0;
     return fd;
 }
-static void http_step(int listener, log_store *store, http_client *client) {
+static void http_step(int *listener, log_store *store, http_client *client) {
     uint64_t now = sl_system_now();
-    if (client->fd < 0 && listener >= 0 && now >= store->accept_after) {
-        store->accept_after = now + 200;
+    if (client->fd < 0 && *listener >= 0 && now >= store->accept_after) {
+        store->accept_after = now + 20;
         /* libnx 4.12.0 bsdAccept requires a non-NULL address length, even
          * when the nonblocking listener has no connection to accept. */
         struct sockaddr_storage peer;
         socklen_t peer_length = sizeof(peer);
-        int fd = accept(listener, (struct sockaddr *)&peer, &peer_length);
+        int fd = accept(*listener, (struct sockaddr *)&peer, &peer_length);
         if (fd >= 0) {
             int rx = 4096, tx = 16384;
             setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rx, sizeof(rx));
@@ -435,6 +476,12 @@ static void http_step(int listener, log_store *store, http_client *client) {
                 client->fd = fd;
                 client->deadline = now + 10000;
             }
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR &&
+                   errno != ECONNABORTED) {
+            store->listen_error = errno;
+            close(*listener);
+            *listener = -1;
+            atomic_store(&http_port, 0);
         }
     }
     if (client->fd < 0)
@@ -504,6 +551,7 @@ static void *log_main(void *unused) {
     else
         store.listen_error = ENOMEM;
     int listener = client ? listen_start(&store) : -1;
+    uint64_t retry_listen = sl_system_now() + 1000;
     char lifecycle[160];
     snprintf(lifecycle, sizeof(lifecycle),
              "diagnostic_service port=%u listen_errno=%d storage_errno=%d", sl_log_http_port(),
@@ -534,8 +582,19 @@ static void *log_main(void *unused) {
         }
         if (atomic_load(&stopping) && empty)
             break;
-        if (client)
-            http_step(listener, &store, client);
+        if (client) {
+            if (listener < 0 && sl_system_now() >= retry_listen) {
+                retry_listen = sl_system_now() + 1000;
+                int previous_error = store.listen_error;
+                listener = listen_start(&store);
+                if (listener >= 0 || previous_error != store.listen_error) {
+                    snprintf(lifecycle, sizeof(lifecycle), "diagnostic_listener_retry port=%u errno=%d",
+                             sl_log_http_port(), store.listen_error);
+                    write_line(&store, lifecycle);
+                }
+            }
+            http_step(&listener, &store, client);
+        }
         if (!message[0])
             usleep(20000);
     }
@@ -544,6 +603,11 @@ static void *log_main(void *unused) {
     if (listener >= 0)
         close(listener);
     atomic_store(&http_port, 0);
+    atomic_store(&runtime_tick, 0);
+    atomic_store(&udp_fd, -1);
+    atomic_store(&udp_error, 0);
+    atomic_store(&udp_received, 0);
+    atomic_store(&udp_replied, 0);
     snprintf(lifecycle, sizeof(lifecycle), "diagnostic_end log_dropped=%u storage_errno=%d",
              sl_log_drop_count(), store.storage_error);
     write_line(&store, lifecycle);
@@ -561,6 +625,11 @@ bool sl_log_start(void) {
     tail[0] = previous_tail[0] = 0;
     atomic_store(&dropped, 0);
     atomic_store(&http_port, 0);
+    atomic_store(&runtime_tick, 0);
+    atomic_store(&udp_fd, -1);
+    atomic_store(&udp_error, 0);
+    atomic_store(&udp_received, 0);
+    atomic_store(&udp_replied, 0);
     atomic_store(&stopping, false);
     atomic_store(&ready, true);
     started = pthread_create(&worker, NULL, log_main, NULL) == 0;
@@ -581,6 +650,9 @@ void sl_log_finish(void) {
     pthread_mutex_destroy(&lock);
 }
 #else
+void sl_log_runtime_status(int fd, int error, uint64_t received, uint64_t replied) {
+    (void)fd; (void)error; (void)received; (void)replied;
+}
 bool sl_log_start(void) {
     return true;
 }

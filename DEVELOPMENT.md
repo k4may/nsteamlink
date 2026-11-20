@@ -101,6 +101,11 @@ runtime 执行协议 stop/join 并在外部使用归零后回收关闭的 decode
 | `./scripts/build-desktop.sh` | `build/desktop/app/nsteamlink` |
 | `./scripts/build-switch.sh` | `build/switch/app/nsteamlink.nro`（诊断工具需显式开启） |
 
+日常客户端构建用 `make switch`，诊断版用 `make switch-diag`；部署用
+`make switch-deploy SWITCH_IP=<本次确认的设备地址>`。部署入口固定先构建
+`nsteamlink_nro`，再归档该 NRO 及 SHA 清单并从同一归档推送。CMake 的
+`nsteamlink` 目标只更新 ELF，不能把它作为客户端 NRO 已更新的依据。
+
 - CMake ≥ 3.22；Switch 目标使用 `$DEVKITPRO/cmake/Switch.cmake` 工具链文件，
   nro 产出用官方 `nx_create_nro()`，不要手写 elf2nro 调用。
 - **环境变量纪律**（decisions D-003）：shell 配置里只导出 `DEVKITPRO / DEVKITA64 / PATH`；

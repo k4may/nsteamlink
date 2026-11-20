@@ -141,6 +141,8 @@ struct sl_runtime {
     uint32_t connect_wait_tick;
 #if NSL_DIAGNOSTICS
     uint64_t cloud_stall_at, frame_at;
+    uint64_t udp_retry_at, udp_poll_at, udp_received, udp_replied;
+    int udp_error;
     sl_control_diagnostics control_diag; /* Counters under lock; no packet/identity storage. */
 #endif
     uint8_t auth_secret[32];
@@ -2437,15 +2439,51 @@ static void sample(sl_runtime *r, uint64_t now) {
     r->last_diag = now;
 }
 #if NSL_DIAGNOSTICS
+static void udp_open(sl_runtime *r) {
+    r->udp_retry_at = sl_system_now() + 1000;
+    r->udp = socket(AF_INET, SOCK_DGRAM, 0);
+    int failure = r->udp < 0 ? errno : 0;
+#ifdef __SWITCH__
+    if (r->udp >= 0 && !sl_control_udp_buffers(r->udp)) failure = errno;
+#endif
+    if (r->udp >= 0 && !failure) {
+        struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(28772),
+                               .sin_addr.s_addr = htonl(INADDR_ANY)};
+        if (fcntl(r->udp, F_SETFL, O_NONBLOCK) ||
+            bind(r->udp, (struct sockaddr *)&a, sizeof(a))) failure = errno;
+    }
+    if (failure && r->udp >= 0) { close(r->udp); r->udp = -1; }
+    if (!r->udp_retry_at || !failure || failure != r->udp_error) {
+        char status[96];
+        snprintf(status, sizeof(status), "runtime: debug UDP fd=%d errno=%d", r->udp, failure);
+        sl_log(status);
+    }
+    r->udp_error = failure;
+    sl_log_runtime_status(r->udp, failure, r->udp_received, r->udp_replied);
+}
 static void udp_poll(sl_runtime *r) {
+    uint64_t now = sl_system_now();
+    sl_log_runtime_status(r->udp, r->udp_error, r->udp_received, r->udp_replied);
+    if (now < r->udp_poll_at) return;
+    r->udp_poll_at = now + 10;
+    if (r->udp < 0 && now >= r->udp_retry_at) udp_open(r);
     if (r->udp < 0)
         return;
     char cmd[128], reply[4096];
     struct sockaddr_in peer;
     socklen_t len = sizeof(peer);
     ssize_t n = recvfrom(r->udp, cmd, sizeof(cmd) - 1, 0, (struct sockaddr *)&peer, &len);
-    if (n <= 0)
+    if (n < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            r->udp_error = errno;
+            close(r->udp); r->udp = -1;
+            r->udp_retry_at = now + 1000;
+            sl_log_runtime_status(-1, r->udp_error, r->udp_received, r->udp_replied);
+        }
         return;
+    }
+    if (!n) return;
+    ++r->udp_received;
     cmd[n] = 0;
     cmd[strcspn(cmd, "\r\n")] = 0;
     if (!strcmp(cmd, "state") || !strcmp(cmd, "stats") || !strcmp(cmd, "perf") ||
@@ -2620,7 +2658,10 @@ static void udp_poll(sl_runtime *r) {
         snprintf(reply, sizeof(reply),
                  "ERR supported: ping state stats perf cloud audio hid hidlog diag [current|prev]");
     }
-    sendto(r->udp, reply, strlen(reply), MSG_DONTWAIT, (struct sockaddr *)&peer, len);
+    ssize_t sent = sendto(r->udp, reply, strlen(reply), MSG_DONTWAIT, (struct sockaddr *)&peer, len);
+    if (sent == (ssize_t)strlen(reply)) { ++r->udp_replied; r->udp_error = 0; }
+    else r->udp_error = errno;
+    sl_log_runtime_status(r->udp, r->udp_error, r->udp_received, r->udp_replied);
 }
 #endif
 static void *worker_main(void *ctx) {
@@ -2640,6 +2681,10 @@ static void *worker_main(void *ctx) {
     r->sns_config = sl_sns_config_cache_create(sl_system_data_dir());
 #endif
     while (!r->quit) {
+#if NSL_DIAGNOSTICS
+        /* Poll before waiting-video/command branches can continue the loop. */
+        udp_poll(r);
+#endif
         if (r->waiting_video) {
             if (!sl_media_video_clean()) {
                 update_control(r, sl_system_now());
@@ -2923,9 +2968,6 @@ static void *worker_main(void *ctx) {
             stop_session(r);
             fail(r, sl_tr(SL_T_SESSION_FAILED));
         }
-#if NSL_DIAGNOSTICS
-        udp_poll(r);
-#endif
         pthread_mutex_lock(&r->lock);
         if (!r->request_pending && !r->quit) {
             struct timespec t;
@@ -3013,40 +3055,7 @@ sl_runtime *sl_runtime_create(const sl_auth_store *store) {
     };
     r->provider = stream_media_create_hid_provider();
 #if NSL_DIAGNOSTICS
-    r->udp = socket(AF_INET, SOCK_DGRAM, 0);
-#ifdef __SWITCH__
-    if (r->udp >= 0 && !sl_control_udp_buffers(r->udp)) {
-        int saved = errno;
-        close(r->udp);
-        r->udp = -1;
-        errno = saved;
-    }
-#endif
-    if (r->udp >= 0) {
-        fcntl(r->udp, F_SETFL, O_NONBLOCK);
-        struct sockaddr_in a = {.sin_family = AF_INET,
-                                .sin_port = htons(28772),
-                                .sin_addr = {.s_addr = htonl(INADDR_ANY)}};
-        if (bind(r->udp, (struct sockaddr *)&a, sizeof(a))) {
-            close(r->udp);
-            r->udp = -1;
-        }
-    }
-    char udp_status[96];
-    snprintf(udp_status, sizeof(udp_status), "runtime: debug UDP fd=%d errno=%d", r->udp, errno);
-    sl_log(udp_status);
-#ifdef __SWITCH__
-    if (r->udp >= 0) {
-        int rx = 0, tx = 0;
-        socklen_t size = sizeof(rx);
-        bool rx_ok = getsockopt(r->udp, SOL_SOCKET, SO_RCVBUF, &rx, &size) == 0;
-        size = sizeof(tx);
-        bool tx_ok = getsockopt(r->udp, SOL_SOCKET, SO_SNDBUF, &tx, &size) == 0;
-        snprintf(udp_status, sizeof(udp_status), "control_udp role=debug rx=%d tx=%d queried=%d",
-                 rx, tx, rx_ok && tx_ok);
-        sl_log(udp_status);
-    }
-#endif
+    udp_open(r);
 #endif
     r->started = pthread_create(&r->worker, NULL, worker_main, r) == 0;
     if (!r->started) {

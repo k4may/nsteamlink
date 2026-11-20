@@ -24,25 +24,58 @@ try {
         $after = [uint64]0
         $baseline = $true
         $nextStats = 0
+        $nextHealth = 0
+        $useHttp = $false
         $timeouts = 0
         function Save($row) {
             $row['collector_elapsed_ms'] = $clock.ElapsedMilliseconds
             $row['collector_wall_utc'] = [DateTime]::UtcNow.ToString('o')
             $writer.WriteLine(($row | ConvertTo-Json -Compress -Depth 12))
         }
+        function ReadHttp([string]$path) {
+            $request = [Net.HttpWebRequest]::Create("http://${address}:28773$path")
+            $request.Proxy = $null
+            $request.Timeout = 500
+            $request.ReadWriteTimeout = 500
+            $response = $request.GetResponse()
+            $reader = New-Object IO.StreamReader($response.GetResponseStream())
+            try { $reader.ReadToEnd() }
+            finally { $reader.Dispose(); $response.Dispose() }
+        }
         try {
             $udp.Connect($address,28772)
             Save @{stage='capture_begin'; address=$address; port=28772; read_only=$true}
             while ($clock.Elapsed.TotalSeconds -lt $seconds) {
+                if ($clock.ElapsedMilliseconds -ge $nextHealth) {
+                    $nextHealth = $clock.ElapsedMilliseconds + 5000
+                    try {
+                        $health = ReadHttp '/health'
+                        $decodedHealth = $health | ConvertFrom-Json
+                        if ($decodedHealth.stage -eq 'diagnostic_health' -and $decodedHealth.diagnostics) {
+                            $useHttp = $true
+                            Save @{stage='device_health'; reply=$health; transport='http'}
+                        }
+                    } catch {
+                        Save @{stage='device_health_unavailable'; error=$_.Exception.Message}
+                    }
+                }
                 $stats = $clock.ElapsedMilliseconds -ge $nextStats
                 $command = if ($stats) { 'haptics' } else { "haptic-trace $after" }
                 if ($stats) { $nextStats = $clock.ElapsedMilliseconds + 1000 }
                 $bytes = [Text.Encoding]::ASCII.GetBytes($command)
+                $transport = if ($useHttp) { 'http' } else { 'udp' }
+                $pageSize = if ($useHttp) { 16 } else { 6 }
                 try {
-                    [void]$udp.Send($bytes,$bytes.Length)
-                    $peer = New-Object Net.IPEndPoint([Net.IPAddress]::Any,0)
-                    $reply = [Text.Encoding]::UTF8.GetString($udp.Receive([ref]$peer))
-                    Save @{stage='device_reply'; request=$command; reply=$reply; baseline_backlog=$baseline}
+                    if ($useHttp) {
+                        $path = if ($stats) { '/haptics' } else { "/haptic-trace?after=$after" }
+                        $reply = ReadHttp $path
+                    } else {
+                        [void]$udp.Send($bytes,$bytes.Length)
+                        $peer = New-Object Net.IPEndPoint([Net.IPAddress]::Any,0)
+                        $reply = [Text.Encoding]::UTF8.GetString($udp.Receive([ref]$peer))
+                    }
+                    Save @{stage='device_reply'; request=$command; reply=$reply;
+                        baseline_backlog=$baseline; transport=$transport}
                     $records = 0
                     foreach ($line in ($reply -split "`n")) {
                         if (-not $line.Trim()) { continue }
@@ -60,16 +93,17 @@ try {
                     }
                     # Drain old ring contents before attributing packets to this run.
                     $traceResponse = $reply.Trim() -eq '{}' -or $records -gt 0
-                    if (-not $stats -and $traceResponse -and $records -lt 6 -and $baseline) {
+                    if (-not $stats -and $traceResponse -and $records -lt $pageSize -and $baseline) {
                         $baseline = $false
                         Save @{stage='trace_baseline'; after_serial=$after}
                     }
-                    if ($records -lt 6) { Start-Sleep -Milliseconds 20 }
+                    if ($records -lt $pageSize) { Start-Sleep -Milliseconds 20 }
                 } catch {
                     $timeouts++
+                    if ($useHttp) { $useHttp = $false }
                     if ($timeouts -eq 1 -or $timeouts % 20 -eq 0) {
                         Save @{stage='device_unavailable'; request=$command; error=$_.Exception.Message;
-                            client_running_state='unknown'}
+                            client_running_state='unknown'; transport=$transport}
                     }
                     Start-Sleep -Milliseconds 50
                 }

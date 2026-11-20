@@ -5,6 +5,7 @@ This verifies collection, backlog handling and export, not a game or real Steam.
 Requires Linux PowerShell; Windows host binary is checked separately under Wine.
 """
 import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
 import socket
@@ -19,9 +20,45 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pwsh', required=True)
+    parser.add_argument('--transport', choices=['udp', 'http'], default='udp')
     args = parser.parse_args()
     requests = []
     stop = threading.Event()
+    def respond(command):
+        requests.append(command)
+        if command == 'haptics':
+            return dict(stage='haptics', ordinary_commands=20, native_commands=2)
+        assert command.startswith('haptic-trace '), command
+        after = int(command.split()[1])
+        if after == 0:
+            return dict(serial=8, kind=1, source=0, rc=0, wire='010001000000000000')
+        if after == 8:
+            return dict(serial=10, kind=1, source=1, rc=0,
+                        wire='0d0a0000001000000005c000014040'+'00'*54)
+        return {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            if self.path == '/health':
+                data = dict(stage='diagnostic_health', diagnostics=True, version='fixture')
+            elif self.path == '/haptics':
+                data = respond('haptics')
+            else:
+                assert self.path.startswith('/haptic-trace?after=')
+                data = respond('haptic-trace '+self.path.split('=', 1)[1])
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    http = HTTPServer(('127.0.0.1', 28773), Handler) if args.transport == 'http' else None
+    http_thread = threading.Thread(target=http.serve_forever) if http else None
+    if http_thread:
+        http_thread.start()
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
         udp.bind(('127.0.0.1', 28772))
         udp.settimeout(.1)
@@ -33,20 +70,7 @@ def main():
                 except TimeoutError:
                     continue
                 command = data.decode()
-                requests.append(command)
-                if command == 'haptics':
-                    reply = dict(stage='haptics', ordinary_commands=20, native_commands=2)
-                else:
-                    assert command.startswith('haptic-trace '), command
-                    after = int(command.split()[1])
-                    if after == 0:
-                        reply = dict(serial=8, kind=1, source=0, rc=0, wire='010001000000000000')
-                    elif after == 8:
-                        # The first page (<6 records) completes old-backlog drain.
-                        reply = dict(serial=10, kind=1, source=1, rc=0,
-                                     wire='0d0a0000001000000005c000014040'+'00'*54)
-                    else:
-                        reply = {}
+                reply = respond(command)
                 udp.sendto(json.dumps(reply).encode(), peer)
 
         thread = threading.Thread(target=serve)
@@ -89,13 +113,18 @@ function Get-ItemProperty { param($Path,$ErrorAction); return $null }
                     assert any(r['stage'] == 'trace_baseline' and r['after_serial'] == 8 for r in rows), rows
                     assert any(r['stage'] == 'capture_gap' and r['next'] == 10 for r in rows), rows
                     replies = [r for r in rows if r['stage'] == 'device_reply']
+                    assert replies and all(r['transport'] == args.transport for r in replies)
                     assert any(r['baseline_backlog'] for r in replies)
                     assert any(not r['baseline_backlog'] for r in replies)
                 assert 'haptics' in requests and 'haptic-trace 0' in requests
         finally:
             stop.set()
             thread.join()
-    print(json.dumps(dict(passed=True, actual_powershell_udp_and_export=True,
+            if http:
+                http.shutdown()
+                http_thread.join()
+                http.server_close()
+    print(json.dumps(dict(passed=True, actual_powershell_collection_and_export=True, transport=args.transport,
                           synthetic_host_and_switch=True, actual_game_verified=False)))
 
 

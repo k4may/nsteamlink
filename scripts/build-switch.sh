@@ -13,7 +13,11 @@ TOOLCHAIN="${DEVKITPRO}/cmake/Switch.cmake"
 cmake -S "$ROOT" -B "$BUILD_DIR" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" "$@"
-cmake --build "$BUILD_DIR" -j"$(nproc)"
+if [[ -n "${NSL_BUILD_TARGET:-}" ]]; then
+    cmake --build "$BUILD_DIR" --target "$NSL_BUILD_TARGET" -j"$(nproc)"
+else
+    cmake --build "$BUILD_DIR" -j"$(nproc)"
+fi
 
 NROS=(
     "$BUILD_DIR/app/nsteamlink.nro"
