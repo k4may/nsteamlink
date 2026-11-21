@@ -80,23 +80,48 @@ def main():
                 folder = Path(tmp)
                 collector = folder / 'run-game-haptics-capture.ps1'
                 collector.write_text((ROOT/'tools/run-game-haptics-capture.ps1').read_text())
+                endpoint_script = 'read-windows-controller-endpoints.ps1'
+                (folder / endpoint_script).write_text((ROOT/'tools'/endpoint_script).read_text())
+                module = folder / 'PnpDevice'
+                module.mkdir()
+                (module/'PnpDevice.psm1').write_text(r'''
+function Get-PnpDevice {
+    param([switch]$PresentOnly)
+    if (-not $PresentOnly) { throw 'Expected present devices only' }
+    [pscustomobject]@{Class='HIDClass'; InstanceId='HID\VID_054C&PID_0CE6&MI_03\0'; Status='OK'}
+    [pscustomobject]@{Class='HIDClass'; InstanceId='HID\VID_28DE&PID_11FF\0'; Status='OK'}
+    [pscustomobject]@{Class='AudioEndpoint'; InstanceId='SWD\MMDEVAPI\{0.0.0.00000000}.{00000000-0000-0000-0000-000000000001}'; FriendlyName='Speakers'; Status='OK'}
+    [pscustomobject]@{Class='AudioEndpoint'; InstanceId='SWD\MMDEVAPI\{0.0.0.00000000}.{00000000-0000-0000-0000-000000000002}'; FriendlyName='Wireless Controller'; Status='OK'}
+    [pscustomobject]@{Class='AudioEndpoint'; InstanceId='SWD\MMDEVAPI\{0.0.1.00000000}.{00000000-0000-0000-0000-000000000001}'; FriendlyName='Microphone'; Status='OK'}
+}
+function Get-PnpDeviceProperty {
+    param($InstanceId,$KeyName)
+    $id = if ($InstanceId -match 'PID_0CE6|000000000001') {
+        '12345678-0000-0000-0000-000000000001'
+    } else { '12345678-0000-0000-0000-000000000002' }
+    [pscustomobject]@{Data=[guid]$id}
+}
+function Get-ItemPropertyValue { param($Name,$LiteralPath); return 1 }
+''')
                 # Start-Process, JSONL redirects and waits are real; only the host
-                # producer and explorer/registry boundary are substituted.
+                # producer, PnP, Explorer and registry boundary are substituted.
                 fake = folder / 'steam-game-haptics-watch.exe'
-                state = dict(stage='host_state', appid=3489700, baseline=True,
-                             native_producer_changed=False, ordinary_cache_changed=False)
+                state = dict(stage='sony_host_state', appid=3489700, baseline=True,
+                             ordinary_cache_changed=False, controller_type=45, sony_firmware_raw=0,
+                             device_caps='0000000000834bff', sony_trigger_cache_changed=False)
                 fake.write_text('#!/bin/sh\nprintf \'%s\\n\' \''+json.dumps(state)+"'\nsleep 1\n")
                 fake.chmod(0o755)
                 harness = folder / 'harness.ps1'
                 harness.write_text('''param($folder)
 $env:LOCALAPPDATA = Join-Path $folder 'localdata'
+$env:PSModulePath = "$folder$([IO.Path]::PathSeparator)$env:PSModulePath"
 function Start-Process {
     param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$PassThru,$RedirectStandardOutput,$RedirectStandardError)
     if ($FilePath -eq 'explorer.exe') { return }
     Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters
 }
 function Get-ItemProperty { param($Path,$ErrorAction); return $null }
-& (Join-Path $folder 'run-game-haptics-capture.ps1') -Seconds 2 -Address 127.0.0.1
+& (Join-Path $folder 'run-game-haptics-capture.ps1') -Seconds 4 -Address 127.0.0.1
 ''')
                 result = subprocess.run([args.pwsh, '-NoProfile', '-File', str(harness), str(folder)],
                                         capture_output=True, text=True, timeout=30)
@@ -107,7 +132,17 @@ function Get-ItemProperty { param($Path,$ErrorAction); return $null }
                     assert archive.testzip() is None
                     exported = json.loads(archive.read('export.json').decode('utf-8-sig'))
                     assert not exported['errors'], exported
-                    assert '3489700' in archive.read('采集说明.txt').decode('utf-8-sig')
+                    summary = archive.read('采集说明.txt').decode('utf-8-sig')
+                    assert '3489700' in summary and '0x0000' in summary and 'Steam 类型 45' in summary
+                    inventory = json.loads(archive.read('windows-endpoints.json').decode('utf-8-sig'))
+                    assert inventory['status'] == 'ok', inventory
+                    assert len(inventory['sony_nodes']) == len(inventory['valve_nodes']) == 1, inventory
+                    assert inventory['render_nodes_enumerated'] == 2, inventory
+                    unrelated, matched = sorted(inventory['related_render_endpoints'],
+                                                key=lambda row: row['sony_container_match'])
+                    assert unrelated['name'] == 'Wireless Controller' and not unrelated['sony_container_match']
+                    assert matched['name'] == 'Speakers' and matched['sony_container_match']
+                    assert matched['mmdevices_render_state'] == 1, matched
                     rows = [json.loads(line) for line in archive.read('switch.jsonl').decode().splitlines()]
                     assert not [r for r in rows if r['stage'] == 'collector_error'], rows
                     assert any(r['stage'] == 'trace_baseline' and r['after_serial'] == 8 for r in rows), rows

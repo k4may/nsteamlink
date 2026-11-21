@@ -1,4 +1,4 @@
-param([ValidateRange(1,3600)][int]$Seconds = 180, [string]$Address = '10.10.10.111')
+param([ValidateRange(1,3600)][int]$Seconds = 60, [string]$Address = '10.10.10.111')
 $ErrorActionPreference = 'Stop'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $root = Join-Path $env:LOCALAPPDATA 'NSteamLink\GameHaptics'
@@ -8,6 +8,8 @@ $started = Get-Date
 $issues = New-Object System.Collections.Generic.List[string]
 $job = $null
 $process = $null
+$endpointJob = $null
+$endpointFile = Join-Path $folder 'windows-endpoints.json'
 Write-Host "Recording for $Seconds seconds. Return to your game and play normally."
 Write-Host 'Keep the vibration test panel CLOSED. This recorder does not generate vibration.'
 try {
@@ -116,6 +118,10 @@ try {
         -ArgumentList "--seconds $Seconds" -WorkingDirectory $PSScriptRoot -PassThru `
         -RedirectStandardOutput (Join-Path $folder 'host.jsonl') `
         -RedirectStandardError (Join-Path $folder 'host-errors.txt')
+    try {
+        $endpointJob = Start-Job -FilePath (Join-Path $PSScriptRoot 'read-windows-controller-endpoints.ps1') `
+            -ArgumentList $endpointFile
+    } catch { $issues.Add(($_ | Out-String)) }
     while (-not $process.HasExited -or $job.State -eq 'Running' -or $job.State -eq 'NotStarted') {
         Start-Sleep -Milliseconds 250
         $process.Refresh()
@@ -124,6 +130,13 @@ try {
         ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $folder 'launch.json')
 } catch { $issues.Add(($_ | Out-String)) }
 finally {
+    if ($endpointJob) {
+        Remove-Job $endpointJob -Force
+    }
+    if (-not (Test-Path -LiteralPath $endpointFile)) {
+        @{status='unavailable'; error='Windows device inventory did not produce a snapshot.'} |
+            ConvertTo-Json | Set-Content -LiteralPath $endpointFile -Encoding UTF8
+    }
     if ($job) {
         if ($job.State -eq 'Running' -or $job.State -eq 'NotStarted') { Stop-Job $job }
         Receive-Job $job -ErrorAction SilentlyContinue | Out-File (Join-Path $folder 'collector-output.txt')
@@ -142,9 +155,12 @@ finally {
     }
     try {
         $rows = @(Get-Content (Join-Path $folder 'host.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
-        $states = @($rows | Where-Object { $_.stage -eq 'host_state' })
+        $states = @($rows | Where-Object { $_.stage -in @('host_state','sony_host_state') })
         $summary = @('只读游戏采集；记录器没有调用震动 API、修改触觉偏好或设备能力。',
             'host.jsonl：Steam 活动 AppID、普通力度缓存、原生 producer 的时间戳与缓存。',
+            'sony_host_state：Steam 识别的 Sony 类型、能力、固件原始值和扳机效果缓存。',
+            'windows-endpoints.json：Windows 当前 Sony/Valve 设备和关联音频输出，使用设备容器匹配。',
+            '单独采集的 Windows 系统设备快照无法观察游戏进程内的 Steam Input 模拟或音频调用。',
             'switch.jsonl：Switch 诊断接口的原始回包；超时只代表采集不可达。',
             '主机状态变化是发送分支的采样证据，不是设备收包证明；不能由此识别游戏原始 API。',
             'native_producer_changed 包括停止请求，缓存的旧脉冲字不能单独证明新增非零脉冲。',
@@ -157,6 +173,13 @@ finally {
             $native = @($group.Group | Where-Object { $_.native_producer_changed }).Count
             $ordinary = @($group.Group | Where-Object { $_.ordinary_cache_changed }).Count
             $summary += "活动 AppID=$($group.Name)：普通缓存变化观测 $ordinary 次，原生 producer 变化观测 $native 次。"
+            foreach ($sony in ($group.Group | Where-Object { $_.stage -eq 'sony_host_state' } |
+                    Group-Object controller_type, sony_firmware_raw, device_caps)) {
+                $first = $sony.Group[0]
+                $changed = @($sony.Group | Where-Object { $_.sony_trigger_cache_changed }).Count
+                $summary += ('Steam 类型 {0}，设备能力 {1}，固件原始值 0x{2:x4}，扳机缓存变化观测 {3} 次。' -f
+                    $first.controller_type,$first.device_caps,[int]$first.sony_firmware_raw,$changed)
+            }
         }
         if (-not $states.Count) { $summary += '没有读到有效主机状态；需检查 host.jsonl，不能判断游戏输出分支。' }
         $summary | Set-Content -Encoding UTF8 (Join-Path $folder '采集说明.txt')

@@ -23,15 +23,15 @@ static inline bool nsl_host_process_read(void *process, uint64_t address, void *
     return ReadProcessMemory((HANDLE)process, (const void *)(uintptr_t)address, out, size, &actual) && actual == size;
 }
 
-static inline int nsl_host_inspect_process(HANDLE process, uint64_t base, uint64_t handle,
-        uint64_t *cached_parent, bool allow_scan, nsl_host_haptics_state *out, nsl_host_inspection *report) {
+static inline int nsl_host_inspect_process_for(HANDLE process, uint64_t base, uint64_t handle,
+        uint64_t *cached_parent, bool allow_scan, bool include_sony, nsl_host_haptics_state *out, nsl_host_inspection *report) {
     *report = (nsl_host_inspection){.source="api_user_tree"};
-    int result = nsl_host_haptics_state_read(nsl_host_process_read, process, base, handle, out);
+    int result = nsl_host_haptics_state_read_for(nsl_host_process_read, process, base, handle, include_sony, out);
     report->tree_result=result;
     if (result == 1) { *cached_parent=out->parent_address; return 1; }
     if (*cached_parent) {
         report->source="validated_parent_cache";
-        result=nsl_host_haptics_parent_read(nsl_host_process_read,process,base,*cached_parent,handle,out);
+        result=nsl_host_haptics_parent_read_for(nsl_host_process_read,process,base,*cached_parent,handle,include_sony,out);
         if(result==1) return 1;
         *cached_parent=0;
     }
@@ -63,7 +63,7 @@ static inline int nsl_host_inspect_process(HANDLE process, uint64_t base, uint64
                     uint64_t vt;memcpy(&vt,bytes+offset,8);
                     if(vt!=base+0x1304dc0) continue;
                     ++report->candidates;
-                    result=nsl_host_haptics_parent_read(nsl_host_process_read,process,base,cursor+offset,handle,out);
+                    result=nsl_host_haptics_parent_read_for(nsl_host_process_read,process,base,cursor+offset,handle,include_sony,out);
                     if(result==1) {*cached_parent=out->parent_address;free(bytes);return 1;}
                     if(result<0) ++report->candidate_read_failures;
                 }
@@ -73,5 +73,10 @@ static inline int nsl_host_inspect_process(HANDLE process, uint64_t base, uint64
     }
 done:
     free(bytes);return 0;
+}
+
+static inline int nsl_host_inspect_process(HANDLE process, uint64_t base, uint64_t handle,
+        uint64_t *cached_parent, bool allow_scan, nsl_host_haptics_state *out, nsl_host_inspection *report) {
+    return nsl_host_inspect_process_for(process, base, handle, cached_parent, allow_scan, false, out, report);
 }
 #endif

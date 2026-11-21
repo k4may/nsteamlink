@@ -71,7 +71,8 @@ static HANDLE find_steam(uint64_t *base) {
  * Persistent old words/shared timestamps must never be called native events. */
 static bool same_target(const nsl_host_haptics_state *a, const nsl_host_haptics_state *b) {
     return a->handle == b->handle && a->appid == b->appid &&
-           a->io_address == b->io_address && a->slot == b->slot;
+           a->io_address == b->io_address && a->slot == b->slot &&
+           a->controller_type == b->controller_type;
 }
 
 int main(int argc, char **argv) {
@@ -107,8 +108,8 @@ int main(int argc, char **argv) {
         }
         nsl_host_haptics_state state = {0}; nsl_host_inspection report = {0};
         bool allow_scan = now >= next_scan;
-        int result = process ? nsl_host_inspect_process(process, base, requested, &cached,
-                                                      allow_scan, &state, &report) : 0;
+        int result = process ? nsl_host_inspect_process_for(process, base, requested, &cached,
+                                                          allow_scan, true, &state, &report) : 0;
         if (allow_scan) next_scan = now + 10000;
         if (result != 1) {
             previous_valid = false;
@@ -122,28 +123,52 @@ int main(int argc, char **argv) {
             }
         } else {
             bool baseline = !previous_valid || !same_target(&previous, &state);
-            bool native = !baseline && (previous.native_left_ticks != state.native_left_ticks ||
+            bool sony = state.controller_type == 45 || state.controller_type == 48;
+            bool native = !sony && !baseline && (previous.native_left_ticks != state.native_left_ticks ||
                                         previous.native_right_ticks != state.native_right_ticks);
             bool ordinary = !baseline && (previous.ordinary_left != state.ordinary_left ||
                                           previous.ordinary_right != state.ordinary_right);
             native_changes += native; ordinary_changes += ordinary;
             if (baseline || memcmp(&previous, &state, sizeof(state)) || now >= next_heartbeat) {
-                printf("{\"stage\":\"host_state\",\"elapsed_ms\":%llu,\"handle\":\"0x%016llx\","
-                       "\"slot\":%u,\"appid\":%u,\"config_type\":%u,\"baseline\":%s,"
-                       "\"ordinary_cache_changed\":%s,\"native_producer_changed\":%s,"
-                       "\"ordinary_left\":%u,\"ordinary_right\":%u,\"native_left_ticks\":%llu,"
-                       "\"native_right_ticks\":%llu,\"shared_ticks\":%llu,\"native_left_word\":\"%08x\","
-                       "\"native_right_word\":\"%08x\",\"pulse_gate\":%u,\"rumble_gate\":%u,"
-                       "\"config_pulse\":%u,\"config_rumble\":%u,\"haptics_preference\":%u,"
-                       "\"preference_valid\":%u,\"enhanced\":%u,\"source\":\"%s\","
-                       "\"packet_delivery_verified\":false}\n",
-                       (unsigned long long)(now-start), (unsigned long long)state.handle,
-                       state.slot, state.appid, state.config_type, baseline?"true":"false",
-                       ordinary?"true":"false", native?"true":"false", state.ordinary_left, state.ordinary_right,
-                       (unsigned long long)state.native_left_ticks, (unsigned long long)state.native_right_ticks,
-                       (unsigned long long)state.shared_ticks, state.native_left_word, state.native_right_word,
-                       state.pulse_gate, state.rumble_gate, state.config_pulse, state.config_rumble,
-                       state.haptics_preference, state.preference_valid, state.enhanced, report.source);
+                if (sony) {
+                    const bool changed = !baseline &&
+                        memcmp(previous.sony_trigger_effects, state.sony_trigger_effects,
+                               sizeof(state.sony_trigger_effects));
+                    printf("{\"stage\":\"sony_host_state\",\"elapsed_ms\":%llu,\"handle\":\"0x%016llx\","
+                           "\"slot\":%u,\"appid\":%u,\"controller_type\":%u,\"config_type\":%u,"
+                           "\"device_caps\":\"%016llx\",\"config_caps\":\"%016llx\","
+                           "\"baseline\":%s,\"ordinary_cache_changed\":%s,\"ordinary_left\":%u,"
+                           "\"ordinary_right\":%u,\"sony_firmware_raw\":%u,\"sony_details_caps\":\"%016llx\","
+                           "\"sony_connection_raw\":%u,\"sony_trigger_cache_changed\":%s,"
+                           "\"sony_trigger_cache_hex\":\"",
+                           (unsigned long long)(now-start), (unsigned long long)state.handle,
+                           state.slot, state.appid, state.controller_type, state.config_type,
+                           (unsigned long long)state.device_caps, (unsigned long long)state.config_caps,
+                           baseline?"true":"false", ordinary?"true":"false", state.ordinary_left, state.ordinary_right,
+                           state.sony_firmware, (unsigned long long)state.sony_details_caps, state.sony_connection,
+                           changed?"true":"false");
+                    for (size_t i = 0; i < sizeof(state.sony_trigger_effects); ++i) {
+                        printf("%02x", state.sony_trigger_effects[i]);
+                    }
+                    printf("\",\"source\":\"%s\",\"packet_delivery_verified\":false}\n", report.source);
+                } else {
+                    printf("{\"stage\":\"host_state\",\"elapsed_ms\":%llu,\"handle\":\"0x%016llx\","
+                           "\"slot\":%u,\"appid\":%u,\"config_type\":%u,\"baseline\":%s,"
+                           "\"ordinary_cache_changed\":%s,\"native_producer_changed\":%s,"
+                           "\"ordinary_left\":%u,\"ordinary_right\":%u,\"native_left_ticks\":%llu,"
+                           "\"native_right_ticks\":%llu,\"shared_ticks\":%llu,\"native_left_word\":\"%08x\","
+                           "\"native_right_word\":\"%08x\",\"pulse_gate\":%u,\"rumble_gate\":%u,"
+                           "\"config_pulse\":%u,\"config_rumble\":%u,\"haptics_preference\":%u,"
+                           "\"preference_valid\":%u,\"enhanced\":%u,\"source\":\"%s\","
+                           "\"packet_delivery_verified\":false}\n",
+                           (unsigned long long)(now-start), (unsigned long long)state.handle,
+                           state.slot, state.appid, state.config_type, baseline?"true":"false",
+                           ordinary?"true":"false", native?"true":"false", state.ordinary_left, state.ordinary_right,
+                           (unsigned long long)state.native_left_ticks, (unsigned long long)state.native_right_ticks,
+                           (unsigned long long)state.shared_ticks, state.native_left_word, state.native_right_word,
+                           state.pulse_gate, state.rumble_gate, state.config_pulse, state.config_rumble,
+                           state.haptics_preference, state.preference_valid, state.enhanced, report.source);
+                }
                 ++snapshots; next_heartbeat = now + 1000;
             }
             previous = state; previous_valid = true;

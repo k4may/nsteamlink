@@ -91,6 +91,20 @@ int main(void) {
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == -1);
     fixture(); put(0x300008, 4, 4);
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 0);
+    fixture();
+    put(0x300008, 45, 4);
+    put(0x300080, 0x0834bff, 8);
+    put(0x300500, 0x02835bff, 8);
+    put(0x3000d0, 1, 4);
+    put(0x3005a8, 0x0224, 2);
+    put(0x3005cf, 0x1121, 2);
+    put(0x3005da, 0x05, 1);
+    assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == 0);
+    assert(nsl_host_haptics_state_read_for(read_state, NULL, base, 0, true, &s) == 1);
+    assert(s.controller_type == 45 && s.device_caps == 0x0834bff && s.sony_firmware == 0x0224);
+    assert(s.sony_details_caps == 0x02835bff && s.sony_connection == 1);
+    assert(s.sony_trigger_effects[0] == 0x21 && s.sony_trigger_effects[1] == 0x11 &&
+           s.sony_trigger_effects[11] == 0x05 && !s.native_left_ticks);
     fixture(); put(0x2a02a0, 0x900000, 8); /* unreadable */
     assert(nsl_host_haptics_state_read(read_state, NULL, base, id, &s) == -1);
     fixture(); mutate = true;

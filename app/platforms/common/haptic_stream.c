@@ -21,6 +21,35 @@ static void compose(sl_haptic_stream *s, sl_haptic_frame *f) {
         }
     }
 }
+static bool render_rumble(const sl_haptic_stream *s, sl_haptic_rumble_level level,
+                          sl_hd_value values[2]) {
+    sl_rumble_layout layout = s->ordinary_routing == 1 ? SL_RUMBLE_LAYOUT_PRO :
+        s->ordinary_routing == 2 ? SL_RUMBLE_LAYOUT_SINGLE_LEFT :
+        s->ordinary_routing == 3 ? SL_RUMBLE_LAYOUT_SINGLE_RIGHT : level.layout;
+    return sl_rumble_render(&s->ordinary_config, layout, level.low, level.high, values);
+}
+static bool has_rumble(sl_haptic_rumble_level level) {
+    return level.low || level.high;
+}
+static void clear_body(sl_haptic_stream *s) {
+    s->body[0] = s->body[1] = silence();
+    s->body_rumble = (sl_haptic_rumble_level){0};
+}
+void sl_haptic_configure_rumble(sl_haptic_stream *s, const sl_rumble_render_config *config,
+                                unsigned routing) {
+    s->ordinary_config = *config;
+    s->ordinary_routing = routing;
+    for (unsigned i = 0; i < s->count; ++i) {
+        sl_haptic_frame *f = at(s, i);
+        if (f->source == SL_HAPTIC_BODY || f->source == SL_HAPTIC_SONY)
+            render_rumble(s, f->rumble_level, f->values);
+    }
+    if (has_rumble(s->body_rumble)) {
+        render_rumble(s, s->body_rumble, s->body);
+        compose(s, &s->current);
+        s->profile_dirty = true;
+    }
+}
 bool sl_haptic_valid_command(const uint8_t *b, size_t size) {
     return b && size && (((b[0] == 1 || b[0] == 6) && (size == 9 || size == 21)) ||
         (b[0] == 13 && size == 69 && ((le32(b + 1) == 10 && b[5] == 0x10) ||
@@ -162,9 +191,10 @@ bool sl_haptic_command_layout(sl_haptic_stream *s, const uint8_t *b, size_t size
             (effect.rumble_stop && s->last_body_source != SL_HAPTIC_SONY))
             return true; /* A Sony audio handoff cannot stop another source. */
         sl_haptic_frame f = {.received_ns = received, .source_ns = received,
-            .sequence = s->stats.commands, .source = SL_HAPTIC_SONY};
-        if (!sl_rumble_render(NULL, layout, effect.rumble_playable ? effect.low : 0,
-                              effect.rumble_playable ? effect.high : 0, f.values)) goto reject;
+            .sequence = s->stats.commands, .source = SL_HAPTIC_SONY,
+            .rumble_level = {effect.rumble_playable ? effect.low : 0,
+                             effect.rumble_playable ? effect.high : 0, layout}};
+        if (!render_rumble(s, f.rumble_level, f.values)) goto reject;
         if (effect.rumble_playable) ++s->stats.adapted_effects;
         s->last_body_source = SL_HAPTIC_SONY;
         replace_future_native(s, received);
@@ -180,10 +210,8 @@ bool sl_haptic_command_layout(sl_haptic_stream *s, const uint8_t *b, size_t size
             .sequence = s->stats.commands + 1, .duration_ns = duration,
             .source = trigger ? SL_HAPTIC_TRIGGERS : SL_HAPTIC_BODY};
         if (!trigger) {
-            sl_rumble_layout output_layout = s->ordinary_routing == 1 ? SL_RUMBLE_LAYOUT_PRO :
-                s->ordinary_routing == 2 ? SL_RUMBLE_LAYOUT_SINGLE_LEFT :
-                s->ordinary_routing == 3 ? SL_RUMBLE_LAYOUT_SINGLE_RIGHT : layout;
-            if (!sl_rumble_render(&s->ordinary_config, output_layout, low, high, f.values)) goto reject;
+            f.rumble_level = (sl_haptic_rumble_level){low, high, layout};
+            if (!render_rumble(s, f.rumble_level, f.values)) goto reject;
             seed_ordinary(s, low, high, layout);
             s->last_body_source = SL_HAPTIC_BODY;
             s->wire_expires_ns = duration && (low || high) ? add(received, duration) : 0;
@@ -310,7 +338,7 @@ void sl_haptic_output_complete(sl_haptic_stream *s, const sl_haptic_frame *f,
         s->current.native != f->native || s->current.due_ns != f->due_ns || s->current.source != f->source)
         return;
     if (!success) s->dirty = true;
-    else {
+    else if (f->source != SL_HAPTIC_PROFILE) {
         /* A successful ordinary/trigger/Sony frame can itself be selected
          * late. Preserve its source gap for backlog callbacks admitted after
          * the worker emptied the queue, just as for already queued frames.
@@ -360,11 +388,13 @@ static bool stop_failed_output(sl_haptic_stream *s, uint64_t now, sl_haptic_fram
         }
         s->count = kept;
         memcpy(values, f.values, sizeof(f.values));
-        uint64_t expires = !is_silent(&f) && f.duration_ns ? add(now, f.duration_ns) : 0;
+        bool active = !is_silent(&f) || has_rumble(f.rumble_level);
+        uint64_t expires = active && f.duration_ns ? add(now, f.duration_ns) : 0;
         if (trigger) {
             s->trigger_expires_ns = expires;
             s->trigger_expiry_source_ns = add(f.source_ns, f.duration_ns);
         } else {
+            s->body_rumble = f.rumble_level;
             s->expires_ns = expires;
             s->body_expiry_source_ns = add(f.source_ns, f.duration_ns);
         }
@@ -383,13 +413,15 @@ static bool stop_failed_output(sl_haptic_stream *s, uint64_t now, sl_haptic_fram
     return false;
 }
 bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) {
+    bool profile_dirty = s->profile_dirty;
+    s->profile_dirty = false;
     /* Expiry is evaluated against actual playback time before composing any
      * partial update, even if that update itself was delayed in the queue. */
     uint64_t expired_at = 0, expired_source = 0;
     if (s->expires_ns && s->expires_ns <= now) {
         expired_at = s->expires_ns; expired_source = s->body_expiry_source_ns;
         s->expires_ns = 0;
-        s->body[0] = s->body[1] = silence();
+        clear_body(s);
     }
     if (s->trigger_expires_ns && s->trigger_expires_ns <= now) {
         if (!expired_at || s->trigger_expires_ns < expired_at) {
@@ -405,7 +437,8 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
             now > add(s->current.source_ns, SL_HAPTIC_MAX_LATENCY_NS);
         if (stale_retry) {
             ++s->stats.stale_frames;
-            for (unsigned i = 0; i < 2; ++i) s->body[i] = s->triggers[i] = silence();
+            clear_body(s);
+            s->triggers[0] = s->triggers[1] = silence();
             s->expires_ns = s->trigger_expires_ns = 0;
             s->current = (sl_haptic_frame){.due_ns = now, .source = SL_HAPTIC_RESET,
                                          .sequence = s->stats.commands};
@@ -422,7 +455,8 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
         stale = true;
     }
     if (stale) {
-        for (unsigned i = 0; i < 2; ++i) s->body[i] = s->triggers[i] = silence();
+        clear_body(s);
+        s->triggers[0] = s->triggers[1] = silence();
         s->expires_ns = s->trigger_expires_ns = 0;
         s->current = (sl_haptic_frame){.due_ns = now, .source = SL_HAPTIC_RESET,
                                      .sequence = s->stats.commands};
@@ -433,13 +467,18 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
             .sequence = s->current.sequence, .source = SL_HAPTIC_EXPIRY};
         compose(s, &f); s->current = f; *out = f; return true;
     }
-    if (!s->count || at(s, 0)->due_ns > now) return false;
+    if (!s->count || at(s, 0)->due_ns > now) {
+        if (!profile_dirty) return false;
+        sl_haptic_frame f = {.due_ns = now, .source_ns = now,
+            .sequence = s->current.sequence, .source = SL_HAPTIC_PROFILE};
+        compose(s, &f); s->current = f; *out = f; return true;
+    }
     sl_haptic_frame f = *at(s, 0);
     s->head = (s->head + 1) % SL_HAPTIC_QUEUE; --s->count;
     /* A partial update at an expiry boundary must see the other channel
      * already stopped, without an extra transient frame at the same time. */
     if (s->expires_ns && s->expires_ns <= f.due_ns) {
-        for (unsigned i = 0; i < 2; ++i) s->body[i] = silence();
+        clear_body(s);
         s->expires_ns = 0;
     }
     if (s->trigger_expires_ns && s->trigger_expires_ns <= f.due_ns) {
@@ -449,12 +488,13 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
     bool trigger = f.source == SL_HAPTIC_TRIGGERS;
     sl_hd_value *values = trigger ? s->triggers : s->body;
     memcpy(values, f.values, sizeof(f.values));
-    bool active = values[0].amp_low || values[0].amp_high || values[1].amp_low || values[1].amp_high;
+    bool active = !is_silent(&f) || has_rumble(f.rumble_level);
     uint64_t expires = active && f.duration_ns ? add(now, f.duration_ns) : 0;
     if (trigger) {
         s->trigger_expires_ns = expires;
         s->trigger_expiry_source_ns = add(f.source_ns, f.duration_ns);
     } else {
+        s->body_rumble = f.rumble_level;
         s->expires_ns = expires;
         s->body_expiry_source_ns = add(f.source_ns, f.duration_ns);
     }
@@ -468,7 +508,7 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
     return true;
 }
 uint64_t sl_haptic_deadline(const sl_haptic_stream *s) {
-    if (s->dirty) return 1;
+    if (s->dirty || s->profile_dirty) return 1;
     uint64_t next = s->count ? s->queue[s->head].due_ns : 0;
     if (s->expires_ns && (!next || s->expires_ns < next)) next = s->expires_ns;
     if (s->trigger_expires_ns && (!next || s->trigger_expires_ns < next)) next = s->trigger_expires_ns;

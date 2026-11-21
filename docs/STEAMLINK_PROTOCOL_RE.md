@@ -1311,6 +1311,64 @@ Conclusion：当前 B/A 不会必然把旧 success 直接接成新连接，但�
 | ControllerConfigMsg.RequestActiveConfig（子类型 4） | 同上；官方 player OnControllerConfigMessage @7c9e04 是空返回 | 同上，不自动添加请求 |
 | HID DeviceRequestFullReport | 主机→客户端恢复完整手柄报告，HandleRemoteHIDMessage @7c6be8 统一分发 | control_hid.c 已调设备 requestFullReport 并立即发送完整报告；不是客户端主动请求主机的游戏结束消息 |
 
+### 22.1.1 VirtualHere 控制消息与 USB 数据通道
+
+**证据。** Android 1.3.32 的协议描述符定义 `102` 请求只带 `hostname`，
+`103` 就绪只带 `licensed_device_count`，`104` 只带 `device_address`。
+`OnDeviceAvailable @0x7bce58` 从选中的共享设备发出请求，
+`VirtualHereReady @0x7c6404` 收到主机就绪后调用 `StartSharing @0x7f02a0`。
+同一 APK 的 Java 类 `com.valvesoftware.steamlink.VirtualHere` 通过 Binder
+绑定固定的 `com.virtualhere.androidserver.DaemonService`，并把就绪回复中的
+授权设备数交给它。该服务负责 USB 数据面。
+
+Windows x64 样本 §30.1 的 `SteamUI.dll` 在
+`0x13a190810–0x13a1909d8` 处理 VirtualHere 请求，同网段检查通过后按状态走商店、
+安装或启动分支。安装调用 `0x13a1908a6` 和启动路径 `0x13a1908d0`
+中的 AppID 均固定为 `440520`。其命令分发器引用 `vhui64.exe`，并将
+会话端点用于 VirtualHere 的 hub 命令。
+Windows 稳定版清单 `1794536281` 复核结果一致。其 `SteamUI.dll`
+（SHA256 `2dfb0a5d50dd90667549cc7d413c7bfb0794c9af4ebaf08bf1cf7d938a11ea93`）
+在 `0x13a198926` 和 `0x13a198950` 装入相同 AppID，
+`0x13a19a7b1` 引用 `MANUAL HUB ADD`，`0x13a203991` 引用 `vhui64.exe`。
+[厂商 FAQ](https://steamcommunity.com/app/440520/discussions/0/358416640399205034/)
+确认 Steam 自动安装并启动 PC 客户端。USB 数据由
+[VirtualHere 的独立连接](https://www.virtualhere.com/node/2447)传输。
+
+**结论。** Remote Play 内置的是与指定商品的协商和启动集成。公开
+[Steam Link SDK](https://github.com/ValveSoftware/steamlink-sdk) 用于开发硬件盒子的
+本地应用，[ISteamRemotePlay](https://partner.steamgames.com/doc/api/ISteamRemotePlay)
+用于游戏查询和管理串流会话，两者均未提供主机 USB 后端的注册接口。
+自行实现 USB 转发可在远端用软件供应一个复合 HID/音频设备，仍需要
+Windows 端相配的接收器和虚拟 USB 主控。该路径与 §22.4 的 RemoteHID 相互独立。
+
+### 22.1.2 Windows 主机的其他设备通道
+
+**证据。** 从同一稳定版 `SteamUI.dll` 文件偏移 `0xd7e250` 提取 22331B 的
+`steammessages_remoteplay.proto` 描述符。102 个控制枚举与 Android 1.3.32 对照，
+仅新增 149 `SetSupportedColorspaces`，70 改为 obsolete。两边四类媒体数据一致。
+VirtualHere 三条消息的定义也一致，无 AppID 或可执行文件字段。开流消息的
+`gameid` 用于标识要串流的游戏，VirtualHere 的安装与启动路径自行装入固定 AppID。
+
+- **RemoteHID（106）。** 同一 Windows 样本 `0xd43ce0` 的 HID 描述符含 VID/PID、
+  报告读写及设备状态，无 USB 配置/音频端点字段。`CHIDDeviceRemote` 是 Steam
+  内部设备对象。真 DualSense 经官方安卓有线连接时的 Windows 枚举对照见
+  [输入参考 §17.2.1](OFFICIAL_INPUT_RE.md#1721-dualsense-枚举能力和固件查询)。
+- **音频（107/108）与 VR（145）。** 同版 `bin/drivers.exe` 中含固定的
+  `ROOT\SteamStreamingMicrophone`、`ROOT\SteamStreamingSpeakers` 媒体设备，
+  另有 Xbox 扩展驱动 `ROOT\steamxbox` 和网络组件。该包未含通用虚拟 USB 主控。
+  `CVRConnectionReady` 仅含 VR `connect_params`，Neptune 139–142 标为 obsolete。
+- **GameInput v4。** 同版 `GameOverlayRenderer64.dll`（SHA256
+  `21c0c1ddb4259c1156356bdfe8432dff504d52c7b96d19718688cff2d5a6e52f`）提供
+  `CGameInputDevice<v4>`。按 Microsoft.GameInput 4.1.314 的接口顺序核对 vtable
+  `0x18013b0d0`，并离线执行原始指令。`GetHapticInfo` 槽 42
+  （`0x1800a0270`）返回成功，但把 644B 输出全清零，含音频端点 ID 及触觉位置。
+  `SendRawDeviceOutput` 槽 57 返回 `E_NOTIMPL`。`SetRumbleState` 槽 47
+  则把四路普通强度转换为 16 位值交给反馈路径。
+
+**结论。** 在所检 Windows 版本中，其他专用通道可以提供游戏手柄输入、普通震动
+或系统音频，但未找到能替代 VirtualHere 挂载 HID/音频复合 USB 的路径。
+GameInput v4 兼容层也没有为该模拟设备提供专用触觉端点。
+
 ### 22.2 StopRequest 的菜单语义与错误发送范围
 
 Evidence：SetupMenubarElements @773e40 使用相对字符串表 @446694，

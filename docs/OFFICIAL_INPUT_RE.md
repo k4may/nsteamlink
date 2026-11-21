@@ -519,6 +519,188 @@ caps_bits/caps_bits2 由辅助函数从 SDL gamepad 能力计算
 `is_generic_gamepad=true` 和 Generic RAW V3；0.7.2 及更早构建报
 `0000:0000` 是 devkitPro SDL 名字型 GUID 使标准解析失败，不是有意省略身份。
 
+Switch 的手柄类型设置按连接冻结。Switch Pro 保留 `057e:2009`，DualSense 选项
+上报 `054c:0ce6` 并在功能查询中返回 PS5 类型 45。两套身份使用同一套 Generic RAW V3。
+真机 Steam 输入测试发现，直接复用 Switch 字母映射会对调 DualSense 的两对面键。
+DualSense 模式因此在 SDK 更新按键状态时将 B/A/Y/X 转为南/东/西/北，增量和全量
+报告使用同一状态。Switch 本地菜单与 Switch Pro 模式仍按原字母映射。
+DualSense 选项不声明现有 Switch 的 legacy pulse 能力。
+Sony 47B 控制包仍按 §22.21 处理。
+
+### 17.2.1 DualSense 枚举能力和固件查询
+
+**枚举证据。** Switch 实机日志 `build/switch-dualsense/deploy-face-position.log:172`
+记录 `054c:0ce6`、`DualSense Wireless Controller`、`caps=00834bff`。
+`control_hid.c::InfoFromHID` 为两种身份使用同一通用能力基线。
+官方 Android Steam Link 1.3.32 的 `libmain-arm64.so`（SHA-256
+`50e1d3147d5d47b71ef1970e1867a2fe4f3e1ecf2ea6153f927fac88b88ea38e`）在 `0x753a88..0x753aa8`
+对 SDL 类型 5、6（PS4、PS5）额外设置 `0x02001000`。离线运行原始
+`0x7537bc`，保持 VID/PID、按键映射和 GUID 不变，仅改变 SDL 类型，复现了
+两个能力位的差异。用户提供的 Windows Steam DLL（SHA-256
+`669fa08e259277fbf5a1dfe15ce88afe734e89151194304b44d92f418dcc985b`）在
+`0x13866f11d..0x13866f12c` 为类型 45 返回默认掩码 `0x02835bff`，
+与实机掩码恰好差这两位。官方以真实 SDL 映射计算完整掩码，其余位随设备而变。
+Windows 在 `0x1386e0903..0x1386e092e` 把这两位扩展到输入区域掩码，
+在 `0x1386653ab..0x1386654db` 用于 Steam 输入布局迁移。未证实这两位
+控制 Windows USB 设备枚举或 Sony 触觉音频端点。
+
+**固件证据。** Android 通用 feature report `0x0c` 在
+`0x753064..0x753080` 调用 `SDL_GetGamepadFirmwareVersion`，在 report ID
+之后写入小端 16 位固件版本，再由 `0x75376c` 返回 21 字节报告。动态 SDL
+函数注册 `0x756170..0x75619c` 将名称与该调用槽对应。
+当前 `sdl_hid_feature_report.c::IHS_HIDDeviceSDLGetFeatureReport` 缺少
+`0x0c`，走只写一个零并返回成功的默认分支。Windows 通用手柄初始化
+`0x13868f031..0x13868f09b` 请求该 report，将成功收到的 16 位值保存到
+DualSense 类型 45/48 的效果状态。Windows 的 `0x1386cfdb0` 序列化
+扳机效果时，对非 Edge、固件低于 `0x0224` 且属于部分分段效果的请求
+改写为关闭 `0x05`，并写出 “FW update required.”。离线执行原厂
+序列化器，输入同一分段阻力样本 `21 ff 03 11 00 00 00 00 00 00 00`，
+版本 0 和 `0x0223` 生成 `05` 加十个零，`0x0224` 保留原效果。
+普通关闭、对照的单段阻力、武器和扳机震动样本在这三档版本间相同。
+复现脚本及输出位于 `build/dualsense-capabilities-20261120/`。
+
+**连接观察。** 怪物猎人试玩的 Sony 配置收到一条有效的 69 字节 Sony 控制
+包，内容为左右扳机关闭，机身两路强度为零，见
+`build/switch-dualsense/wilds-dualsense-analysis.json`。它证明 Steam 内部选择
+过 Sony 控制输出，无法单凭关闭报告区分游戏主动清零与主机固件条件改写。
+该试玩、Moss 试玩与影之刃零的 Sony 配置记录没有专用 PCM。Windows Steam
+向游戏所暴露的实际设备接口和音频端点仍需主机侧的实测。Steam 内显示 USB
+只说明该层的设备分类。原生 Sony 音频触觉和扳机控制分开，见 §22.19。
+
+**《剑星》实机与响应契约。** `game-results-20261120-230857-031.zip` 中，
+Windows Steam 对游戏 AppID 3489700 明确启用 XInput 映射，同时内部设备类型
+为 45，能力和配置均为 `0x008b4bff`。Windows 设备快照完成，未枚举到 Sony
+HID/USB 节点或匹配 Sony 的播放端点（7 个播放节点中 3 个无法读取容器）。
+游戏配置期间普通缓存变化 24 次、Sony 扳机缓存无变化。Switch UDP 全程可用，
+基线后收到并提交普通包 37 条，其中 25 条强度非零，Sony / Nintendo 原生 /
+PCM 均无新增。原始记录与计数保存在
+`build/dualsense-host-endpoint-capture/stellar-230857/analysis.json`。
+主机实际固件原始值为 `0xffff`，与初始化失败时 `0x7fffffff` 截断一致。
+该值在上面的无符号比较中高于 `0x0224`。因此撤回将本轮输出缺失归因于
+低固件门槛的推断，未观测到游戏访问哪个进程内接口。
+
+**证据修正。** 撤回把 Steam 的 `uses xinput: true` 解释为《剑星》进程调用
+XInput 的说法。该字段描述 Steam 为当前游戏配置启用的映射。手柄客户端
+使用 HIDAPI 访问物理设备是另一层。Switch 抓包可以确认收到哪类反馈，
+游戏内实际调用需要单独的进程侧证据。
+
+同包 `controller.txt:614,618` 的 “couldn't get controller details” 对应
+Windows `0x13868e95f..0x13868e979` 查询 `0x04` 失败并重试后的日志分支
+`0x13868ec8f..0x13868ed44`。官方 Android 的
+`CStreamPlayer::HandleRemoteHIDMessage` 在 `0x7c6e14..0x7c6e34` 把 HID 返回
+的正数作为数据长度，`0x7c73a8..0x7c73c4` 再把同一返回值写入
+`RequestResponse.result`。Windows `0x1386e46a0..0x1386e4751` 拷贝数据后
+返回该字段。SDK 的 SDL 内部以 0 表示成功，必须在消息层转换为返回的字节数，
+不可把 0 直接写进有数据的 GetFeatureReport 回复。该差异与 Windows 的失败
+日志一致，消除日志警告仍须连接实测确认。固件 0x0c 按官方格式编码，Nintendo
+背后的 DualSense 映射返回未知版本 0。
+另修正 `0x04` 的玩家字段。Android `0x753230..0x753268` 把编号限制在
+低三位并设置通用位 `0x08`。Windows `0x13868e9e0..0x13868e9ee` 和
+`0x13868ec34..0x13868ec4e` 分别读取这三位与独立标志。未分配的 `-1`
+只应编码为编号 7，不能把同字节的独立标志也置位。
+
+**修正后的实机对照。** `game-results-20261120-234037-695.zip` 对应新版
+NRO 连接。23:39:00 设备重新打开后，上一轮两条详情读取失败警告消失。
+`host.jsonl` 的固件值由 `0xffff` 变为 Switch 映射特意返回的未知值
+`0x0000`，确认主机采用了新回复。类型 45 及设备和配置掩码
+`0x008b4bff` 保持相同。Steam 日志对 AppID 3489700 仍采用 XInput
+映射，Windows 快照仍无 Sony HID/USB 节点或与 Sony 容器匹配的播放端点。
+Switch 基线后连续收到并成功提交 159 条普通命令，其中 110 条非零。
+Sony 控制、Nintendo 原生、扳机和 PCM 增量均为 0。两轮动作未作严格对齐，
+命令数量差异不能作为震动品质变化证据。对照数据见
+`build/dualsense-host-endpoint-capture/stellar-234037/analysis.json`。
+
+这证明详情读取错误已经修复，也证明该错误并不足以解释《剑星》在此环境
+使用普通输出。补齐这类手柄回复并未为游戏建立专用的 Sony 音频输出。
+观察结论限于当前 Steam 版本、配置及可见端点，不能外推为 Steam Link
+全部设备或全部游戏一定无法发送 Sony 控制报告。
+
+**DualSense 通用设备描述。** Windows 初始化
+`0x13868ea9e..0x13868eb48` 在详情 `0x04` 的能力词非零时用它覆盖内部
+`+0x500` 的能力。因此只改枚举不能覆盖详情字段，旧实现填零则保留枚举值。
+DualSense 模式使用宿主类型 45 的标准低字 `0x02835bff`，在枚举
+和 `0x04` 字节 16–19 同时发送。类型位 `0x1000`、`0x02000000`
+来自官方 SDL 类型分支，高字为零，与虚拟设备可提供的额外按钮一致。
+详情字节 12–15 为标准游戏手柄类 1，末字节保留 SDL 驱动数据。
+真实设备序列号按后端提供值读取，Switch 映射没有 Sony 序列号和固件，
+分别返回空和 0。没有声明 Nintendo 原生脉冲或专用 Sony 音频源。
+
+Android Generic `0x753154` 的 `0x0e` 是 SDL 序列号的逗号后子串，
+`0x75309c` 的 `0x0f` 为无线标记、电源状态和百分比，
+`0x7531ec` 的 `0x10` 按 GUID 和 SDL 链路状态编码。三个查询与 `0x07`
+均使用 21 字节报告，短请求按缓冲区长度截断。SDL2 无连接状态 API 时，
+只从已知蓝牙 GUID 取得无线标记，其余沿用通用标记。Generic 产品名通过
+`0x753b80` 的同类查询返回，厂商字符串与单独 HID 序列号字符串依照官方留空。
+这些字段是远程通用手柄描述，不能用来表示 Windows 已创建 Sony USB 音频设备。
+只读记录器另外保存固件 `+0x5a8`、详情派生能力 `+0x500` 和连接字段
+`+0xd0`，以便观察枚举和详情被主机采用的结果。
+
+**完整掩码的实机对照。** 2026-11-21 的
+`game-results-20261121-000459-819.zip` 及同次 nxlink 日志显示，Switch
+枚举 `0x02835bff`，Steam 类型 45 的设备能力和《剑星》活动配置
+都读到 `0x028b5bff`。差值 `0x80000` 来自 Steam 生成替代序列号
+的分支 `0x13868ef60..0x13868f026`。返回游戏前的 AppID 413080
+短暂显示旧配置值，但 AppID 3489700 的全部 104 个样本都采用新值。
+附件使用了旧版采集器，未直接采集详情字段和连接字段。设备与游戏配置的
+能力值由已记录的字段独立证实，毋须把旧窗口的值当成游戏配置。
+Steam 同时记录该游戏使用 XInput。Windows 设备快照仍无 Sony HID
+或匹配的 Sony 播放端点。基线后 139 条普通命令全部成功提交，其中
+93 条强度非零，Sony 控制和 PCM 均无新增，采集序号无缺口。
+机器分析见 `build/dualsense-capabilities-20261120/stellar-000459/analysis.json`。
+
+**官方 Android Steam Link 对照。** 2026-11-21 的
+`game-results-20261121-002724-067.zip` 来自真 DualSense 通过蓝牙连接
+Android 16。主机 `streaming_log.txt:102,111` 显示官方客户端发送
+`054c:0ce6`、`PS5 Controller`、`sdl://7`。Steam 将其分配到 XInput
+槽 1，并对《剑星》AppID 3489700 启用 XInput 映射
+（`controller.txt:537..549,695..700`）。同一 Steam DLL 的 114 个游戏
+样本中，设备能力及活动配置均为 `0x021f5bff`，固件为 0，普通力度缓存
+变化 75 次，Sony 扳机缓存无变化。Windows 快照仍未枚举出 Sony HID 或
+对应的播放端点。采集地址是 Switch，本轮没有手机端收包采样。
+
+与 Switch 的 `0x028b5bff` 相比，官方仅有 `0x00040000` 与
+`0x00100000`，Switch 仅有 `0x00800000`。前者在官方实现中分别参与
+传感器检测和通用输入能力生成，后者来自 `misc1` 映射。两边《剑星》的
+XInput 路由与系统端点观测一致，无证据表明这三个差位决定机身触觉音频。
+结论限于 Android 蓝牙这一路，不外推到有线客户端、其他平台或游戏，
+也不以主机普通缓存代替手机端震动测量。对照计数保存于
+`build/dualsense-capabilities-20261120/official-phone-002724/comparison.json`。
+Valve 的 [Android 版本说明](https://steamcommunity.com/app/353380/discussions/4/1694922345923309554/)
+在 1.1.91.228 明确称有线 DualSense 功能为增强普通震动模拟。
+[Android 1.3.29](https://steamcommunity.com/app/353380/discussions/4/834999160768878490/)
+单独增加部分 Android 版本的 PlayStation 蓝牙陀螺仪支持。
+[Steam Input 扳机 API](https://partner.steamgames.com/doc/api/ISteamInput#SetDualSenseTriggerEffect)
+传输扳机参数。这三种能力都不能作为游戏机身音频触觉透传的证据。
+
+**官方 Android USB 对照。** 同一主机、同一游戏的
+`game-results-20261121-003945-873.zip` 在 `streaming_log.txt:435,438`
+记录 Sony 手柄的 USB GUID `0300…6800`，`controller.txt:585` 识别
+远程设备使用 HIDAPI。和蓝牙轮次相比，Steam 读取到真实固件 `0x0630`，
+设备能力及《剑星》活动配置均为 `0x22975bff`。该固件值高于扳机
+序列化器的 `0x0224` 门槛。游戏日志仍采用 XInput
+（`controller.txt:689..694`）。109 个游戏样本中，普通缓存变动 71 次，
+Sony 扳机缓存无变化。连接初始化期间有 `CPulseHapticWorkItem` 排队记录，
+此时存在多个远程控制器，记录不足以确定目标、输出格式或交付结果。
+Windows 快照仍没有 Sony HID 或对应播放端点。三轮对照在
+`build/dualsense-capabilities-20261120/official-phone-usb-003945/comparison.json`。
+快照证明有线让官方客户端识别到更多真实设备信息，但本环境的游戏映射及
+系统端点结果没有改变。手机实际反馈与发包未采样。
+
+Windows 的 HIDAPI 日志字符串在 `0x139319280`。初始化在
+`0x13868e9e6..0x13868ea9e` 根据远端 Generic `0x04` 报告的 HIDAPI
+标记输出该日志，说明客户端手柄后端。稍后加载《剑星》配置时的
+`Controller 0 uses xinput : true` 说明 Steam 在主机上的映射。
+这两项可以同时成立，后者不是游戏进程的 API 调用跟踪。
+
+用户报告 USB 和蓝牙的实际震感略有差别。两轮主机都出现相同的普通强度对，
+例如 `58981/58536`，但动作和时间序列未严格对齐。另对官方 Android
+原始 `CHIDDeviceSDLGamepad::Write`（`0x7527b4`）离线回放合成报告，
+21 字节 `01` 将样本的两路强度和 5000ms 原样交给
+`SDL_RumbleGamepad`，69 字节 `0d` 则把 47 字节效果交给
+`SDL_SendGamepadEffect`。该实验验证手机软件内的分流，未捕获实机
+输出给 DualSense 的 USB/Bluetooth 报告。结合 Valve 的有线增强震动
+模拟公告，手机端播放差异可以解释用户的观察，仍属推断。
+
 ### 17.3 Generic wire 格式 = RAW V2 结构体，版本字节 3【已验证】
 
 `CStreamPlayer::CHIDDeviceReportGenerator` 的两个分发器按 this+148 分发
@@ -2137,6 +2319,24 @@ SDL 的 [SendGamepadEffect](https://wiki.libsdl.org/SDL3/SDL_SendGamepadEffect)
 图标，但这不是 Sony HID 与触觉音频端点。游戏原生 Sony 输出不会因原设备
 类型可查询而自动改用 Steam Input 的输出 API。
 
+2026 年 2 月，[Valve Steam Link 开发者 Packetdancer 的答复](https://steamcommunity.com/app/353380/discussions/0/785450979403495313/)
+明确区分远程通用手柄和游戏可直接枚举的 Sony HID。默认串流提供前者，后者
+需要 host 侧额外呈现设备。开发者提出经 VirtualHere 转发有线 USB 作为
+可能的办法，未给出该游戏的实测结果或内置直通的上线计划。
+[VirtualHere 作者的 FAQ](https://steamcommunity.com/app/440520/discussions/0/358416640399205034/)
+说明 Steam 会自动安装并启动 VirtualHere 主机客户端，Android 还需另装
+VirtualHere 服务端。因此这条路线仍超出 §22.18 的零主机额外组件约束。
+Steam 的固定商品协商和独立 USB 数据通道见 [协议参考 §22.1.1](STEAMLINK_PROTOCOL_RE.md#2211-virtualhere-控制消息与-usb-数据通道)。
+[Android 1.4.7 发布说明](https://steamcommunity.com/app/353380/discussions/4/573806979786635385/)
+也未宣布向主机呈现原生 Sony 设备或加入机身触觉波形传输。
+
+Android 有线更新说明中的增强模拟使用已有普通强度。Valve 开发者提交的
+[SDL 对应实现](https://github.com/libsdl-org/SDL/commit/b0e827fb65eaff7d48cac0f87978c96179811789)
+在新固件模式写入两路马达值并禁用音频触觉。官方安卓 USB 实测 §17.2.1 已
+确认真实 DualSense、可读取的固件与 HIDAPI，主机仍未出现 Sony HID/音频
+端点。它支持“客户端可以改变普通震动的播放”这一解释，实机 USB 输出报告
+未采样，无法判定那次主观差异具体由哪个模式造成。
+
 2021-12-06 的 [FFXIV Steam Link 原帖](https://steamcommunity.com/app/353380/discussions/7/3193611900717183832/)
 中 slouken 明确表示该游戏的 PS5 支持仅限直接连接。它是当时该游戏的边界，
 不单独充当所有新版本的定论；当前公开兼容层文档及本项目已有远程 HID 结构
@@ -2225,6 +2425,14 @@ Linux hid-nintendo 的默认频带及 libnx 参数接口，是可验证的起点
 机械最优。Pro 双侧各保留双频带；Handheld/JoyDual 分侧；单 Joy-Con 合并
 普通两源到其一只震动器。专用立体 PCM 要求双震动器，单 Joy-Con 拒绝并记账，
 不能无声丢掉一侧或把单侧输出称为完整空间还原。
+
+实时频率、幅度和输出位置设置对 `01` 和 Sony 模拟 rumble 共用。调节时按
+原强度重算当前和待播放的普通输出，并保留源时间、原定到期和扳机状态。
+Nintendo 原生样本和专用 PCM 继续按各自参数播放。
+
+**回放证据。** 用《剑星》采集中的 Switch 记录（`game-results-20261121-000459-819.zip`
+内 `switch.jsonl`）驱动同一个 C 播放状态机。整份采集的 155 条普通命令与历史提交的
+左右频率、幅度及调度时间逐条匹配。这个对照验证默认渲染和调度的兼容性，机械响应仍需实测。
 
 **Timeline：** 身体状态（普通/Nintendo/Sony/PCM）按源事件选择，trigger 是
 独立叠加通道。源队列有界；普通收到 start/stop 同批处理时保留接收间隔。
@@ -2756,6 +2964,19 @@ abstraction `+0x528 + side*8`；`0x1386954dc` 更新共享 `+0x538`。
 `haptic-trace`，初次追赶的旧环形记录标记 baseline_backlog；追上后记录序号缺口。
 主机采样不等待 UDP。每轮按游戏单独导出原始 `host.jsonl`、`switch.jsonl`
 和 Steam 日志尾部；不要求向 Steam 添加测试游戏，也不更新 Switch 输出逻辑。
+
+Sony 配置的只读观察使用同一 SHA 固定的 Generic abstraction，仅接受已验证
+vtable 下的类型 45/48。单独记录 `sony_host_state`，其中 `sony_firmware_raw`
+读取 `+0x5a8`（查询失败时可能为截断后的默认值 `0xffff`），扳机效果缓存
+读取 `+0x5cf` 起连续 22 字节。布局来自 §17.2.1 的初始化分支及
+`0x138693ec7..0x138693f75` 的比较和写入。缓存变化只证明 Steam 编码
+分支里的值变动，不能证明写入成功或取代 Switch 的原包记录。
+
+`windows-endpoints.json` 在串流中用 `Get-PnpDevice -PresentOnly` 枚举
+Windows 的 Sony `054c:0ce6/0df2` 和 Valve HID/USB 节点。音频输出用
+`DEVPKEY_Device_ContainerId` 关联，显示名只保留为候选线索。缺少快照或
+容器属性不可读记为未知。该快照来自独立进程，无法观察 Steam 在游戏
+进程内对输入 API 的模拟，也无法证明该游戏选择或写入了某个端点。
 
 **判据：** `app/platforms/switch/rumble.c::record_command` 保留输入原包及解析
 结果：kind1/rc0 是接受记录，source0/1/2/3 分别为普通/Nintendo/扳机/Sony控制；

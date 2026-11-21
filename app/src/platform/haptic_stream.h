@@ -12,8 +12,14 @@
 
 typedef enum sl_haptic_source {
     SL_HAPTIC_BODY, SL_HAPTIC_NINTENDO, SL_HAPTIC_TRIGGERS,
-    SL_HAPTIC_SONY, SL_HAPTIC_EXPIRY, SL_HAPTIC_RESET, SL_HAPTIC_PCM
+    SL_HAPTIC_SONY, SL_HAPTIC_EXPIRY, SL_HAPTIC_RESET, SL_HAPTIC_PCM,
+    SL_HAPTIC_PROFILE
 } sl_haptic_source;
+
+typedef struct sl_haptic_rumble_level {
+    uint16_t low, high;
+    sl_rumble_layout layout;
+} sl_haptic_rumble_level;
 
 typedef struct sl_haptic_frame {
     sl_hd_value values[2];
@@ -22,6 +28,7 @@ typedef struct sl_haptic_frame {
     bool native;
     sl_haptic_source source;
     uint64_t source_ns, duration_ns;
+    sl_haptic_rumble_level rumble_level;
 } sl_haptic_frame;
 
 typedef struct sl_haptic_stats {
@@ -52,10 +59,15 @@ typedef struct sl_haptic_stream {
     bool pcm_started, pcm_ended;
     sl_rumble_render_config ordinary_config;
     unsigned ordinary_routing; /* 0 hardware layout, 1 both, 2 left, 3 right */
+    sl_haptic_rumble_level body_rumble;
+    bool profile_dirty;
     sl_haptic_stats stats;
 } sl_haptic_stream;
 
 void sl_haptic_init(sl_haptic_stream *s);
+/* Live settings affect body rumble only. They preserve authored samples,
+ * trigger state and the duration of the current envelope. */
+void sl_haptic_configure_rumble(sl_haptic_stream *s, const sl_rumble_render_config *config, unsigned routing);
 bool sl_haptic_valid_command(const uint8_t *command, size_t size);
 void sl_haptic_stop(sl_haptic_stream *s, uint64_t now);
 bool sl_haptic_command(sl_haptic_stream *s, const uint8_t *command, size_t size,

@@ -288,21 +288,8 @@ bool sl_rumble_configure_ordinary(float low_hz, float high_hz, float peak, unsig
     if (ok && (stats.ordinary_config.low_hz != low_hz || stats.ordinary_config.high_hz != high_hz ||
         stats.ordinary_config.low_max_amplitude != peak || stats.ordinary_config.high_max_amplitude != peak ||
         stats.ordinary_routing != routing)) {
-        uint64_t now = now_ns();
-        for (unsigned i = 0; i < 8; ++i) {
-            sl_hd_state decoder[2];
-            memcpy(decoder, slots[i].stream.decoder, sizeof(decoder));
-            sl_sony_state sony = slots[i].stream.sony;
-            bool desynchronized = slots[i].stream.desynchronized;
-            uint64_t wire_expiry = slots[i].stream.wire_expires_ns;
-            sl_haptic_stop(&slots[i].stream, now);
-            memcpy(slots[i].stream.decoder, decoder, sizeof(decoder));
-            slots[i].stream.sony = sony;
-            slots[i].stream.desynchronized = desynchronized;
-            slots[i].stream.wire_expires_ns = wire_expiry;
-            slots[i].stream.ordinary_config = config;
-            slots[i].stream.ordinary_routing = routing;
-        }
+        for (unsigned i = 0; i < 8; ++i)
+            sl_haptic_configure_rumble(&slots[i].stream, &config, routing);
         stats.ordinary_config = config; stats.ordinary_routing = routing;
         ++stats.ordinary_config_revision;
         pthread_cond_signal(&wake);

@@ -17,6 +17,58 @@ static sl_haptic_frame play(sl_haptic_stream *s, uint64_t when) {
     sl_haptic_output_complete(s, &f, when, when, true, true);
     return f;
 }
+static void live_rumble_settings(void) {
+    sl_haptic_stream s;
+    sl_haptic_init(&s);
+    const uint8_t body[9] = {1,255,255,255,255,10};
+    const uint8_t trigger[9] = {6,255,255,0,0,15};
+    assert(sl_haptic_command(&s, body, 9, t, t, true));
+    assert(sl_haptic_command(&s, trigger, 9, t+ms, t, true));
+    assert(sl_haptic_command(&s, off, 9, t+20*ms, t, true));
+    play(&s, t);
+    play(&s, t+ms);
+
+    sl_rumble_render_config config = sl_rumble_render_default_config();
+    config.low_max_amplitude = config.high_max_amplitude = 0;
+    sl_haptic_configure_rumble(&s, &config, 3);
+    sl_haptic_frame f = play(&s, t+2*ms);
+    assert(f.source == SL_HAPTIC_PROFILE && f.values[0].amp_high > 0);
+    assert(!f.values[0].amp_low && !f.values[1].amp_low && !f.values[1].amp_high);
+    assert(s.count == 1 && s.expires_ns == t+10*ms && s.trigger_expires_ns == t+16*ms);
+
+    config.low_hz = 100;
+    config.high_hz = 500;
+    config.low_max_amplitude = config.high_max_amplitude = .5f;
+    sl_haptic_configure_rumble(&s, &config, 3);
+    f = play(&s, t+4*ms);
+    assert(f.source == SL_HAPTIC_PROFILE && f.values[0].amp_high > 0 && !f.values[0].amp_low);
+    assert(f.values[1].amp_low == .5f && f.values[1].amp_high == .5f);
+    assert(f.values[1].freq_low == 100 && f.values[1].freq_high == 500);
+    f = play(&s, t+10*ms);
+    assert(f.source == SL_HAPTIC_EXPIRY && f.values[0].amp_high > 0 && !f.values[1].amp_high);
+    f = play(&s, t+16*ms);
+    assert(f.source == SL_HAPTIC_EXPIRY && !sounding(&f));
+    assert(sl_haptic_deadline(&s) == t+20*ms);
+    assert(play(&s, t+20*ms).source == SL_HAPTIC_BODY);
+
+    const uint8_t sony[69] = {13,47,0,0,0,3,0,64,128};
+    assert(sl_haptic_command(&s, sony, 69, t+25*ms, t+25*ms, true));
+    f = play(&s, t+25*ms);
+    assert(f.source == SL_HAPTIC_SONY && !f.values[0].amp_low && !f.values[0].amp_high);
+    assert(fabsf(f.values[1].amp_low - .5f*128/255) < 1e-6f);
+    assert(fabsf(f.values[1].amp_high - .5f*64/255) < 1e-6f && f.values[1].freq_high == 500);
+
+    sl_haptic_init(&s);
+    assert(sl_haptic_command(&s, pulse, 69, t, t, true));
+    assert(play(&s, t).native && s.count > 0);
+    unsigned pending = s.count;
+    uint64_t next = sl_haptic_deadline(&s);
+    sl_haptic_configure_rumble(&s, &config, 3);
+    assert(s.count == pending && sl_haptic_deadline(&s) == next);
+    assert(!sl_haptic_advance(&s, next-1, &f));
+    f = play(&s, next);
+    assert(f.native && sounding(&f));
+}
 int main(void) {
     sl_haptic_stream s;
     sl_haptic_frame f;
@@ -200,5 +252,6 @@ int main(void) {
     f=play(&s,t+ms); assert(!f.values[0].amp_low && f.values[1].amp_high>0);
     assert(s.expires_ns==t+6*ms);
     f=play(&s,t+6*ms); assert(!sounding(&f));
-    puts("PASS ordinary envelopes, bounded retries, independent channels, source gaps and desync recovery");
+    live_rumble_settings();
+    puts("PASS ordinary envelopes, live rumble settings, bounded retries, independent channels, source gaps and desync recovery");
 }

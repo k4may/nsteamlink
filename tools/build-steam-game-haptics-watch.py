@@ -12,12 +12,15 @@ README = """NSteamLink 游戏震动只读记录器
 
 1. 关闭之前的震动测试面板，保持 Switch 正常串流连接 Steam，进入游戏可操作的场景。
 2. 在主机电脑解压本包，双击 Start-Game-Capture.cmd；不用加到 Steam 库。
-3. 切回游戏玩三分钟：先停留几秒，再战斗/受击/交互，重复同一事件数次。
+3. 切回游戏玩一分钟，重复同一触觉事件数次。
 4. 结束后自动生成并选中 game-results-*.zip，发回这个 ZIP。
-每个游戏单独运行一次记录器。已有《剑星》即可先测，不必等下载。
+要核对 Sony 路径，可以用 DualSense 诊断构建串流《剑星》或其他游戏后采集一次。
 
 这是采集器，不会主动震动，不安装东西，不改 Steam 设置、设备身份或游戏文件。
-本包不要求更新 Switch。Steam 主机状态适配此前提供的 DLL 版本；不同版本只记录未知。
+本包不要求更新 Switch。Windows 端点采集运行一次，不依赖 Steam DLL 版本。
+Steam 内部状态适配此前提供的 DLL 版本，并记录 Sony 控制器的能力、固件值和扳机效果缓存。
+windows-endpoints.json 记录 Windows 当前的 Sony/Valve 设备，以及与 Sony 共用设备容器的
+音频输出。独立进程的设备快照不能证明游戏进程实际选择了哪个输入接口或音频输出。
 主机原生 producer 时间戳变化包括停止，不能当成已收到的非零波形。
 Switch 诊断接口可访问时，原包类型和系统提交记录可验证接收/输出链路；
 不可访问时仍保存主机记录和 Steam 日志，不把采集失败说成游戏不支持。
@@ -27,7 +30,7 @@ Switch 诊断接口可访问时，原包类型和系统提交记录可验证接�
 包里“采集说明.txt”和原始 host.jsonl / switch.jsonl 区分证据强度。
 
 如需改时长/IP，在 PowerShell 执行：
-.\\run-game-haptics-capture.ps1 -Seconds 180 -Address 10.10.10.111
+.\\run-game-haptics-capture.ps1 -Seconds 60 -Address 10.10.10.111
 """
 
 
@@ -47,15 +50,16 @@ def main():
     (out / '使用说明.txt').write_text(README, encoding='utf-8-sig')
     (out / 'Start-Game-Capture.cmd').write_bytes(
         b'@echo off\r\ncd /d "%~dp0"\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-game-haptics-capture.ps1"\r\nif errorlevel 1 pause\r\n')
-    (out / 'run-game-haptics-capture.ps1').write_text(
-        (ROOT / 'tools/run-game-haptics-capture.ps1').read_text(), encoding='utf-8-sig')
+    scripts = ['run-game-haptics-capture.ps1', 'read-windows-controller-endpoints.ps1']
+    for script in scripts:
+        (out / script).write_text((ROOT / 'tools' / script).read_text(), encoding='utf-8-sig')
     sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
     manifest = dict(schema=1, read_only=True, system_imports=dlls,
                     source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                     files={p.name: sha(p) for p in out.iterdir() if p.is_file() and p.name != 'manifest.json'},
                     sources={str(p.relative_to(ROOT)): sha(p) for p in [
                         ROOT / 'tools/steam-game-haptics-watch-win.c', ROOT / 'tools/steam-haptics-host-state.h',
-                        ROOT / 'tools/steam-haptics-host-inspect-win.h', ROOT / 'tools/run-game-haptics-capture.ps1']},
+                        ROOT / 'tools/steam-haptics-host-inspect-win.h', *(ROOT / 'tools' / script for script in scripts)]},
                     actual_game_capture_verified=False, physical_fidelity_verified=False)
     (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+'\n')
     archive = out.parent / 'NSteamLink-Game-Haptics-Capture-Windows-x64.zip'

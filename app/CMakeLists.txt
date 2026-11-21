@@ -204,6 +204,7 @@ target_sources(nsl_platform PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/background.c")
 target_link_libraries(nsl_platform PUBLIC nsl_ui nsl_artwork nsl_updater nsl_stream_settings ihslib ihslib-hid-sdl PkgConfig::SDL2 PkgConfig::SDL2_TTF
     PkgConfig::FFMPEG Opus::opus Threads::Threads nsl_gfx nsl_remote)
 target_compile_definitions(nsl_platform PRIVATE NSL_HAVE_SNS=$<BOOL:${NSL_BUILD_SNS}>)
+target_compile_definitions(nsl_platform PRIVATE NSL_DEFAULT_DUALSENSE=$<BOOL:${NSL_DEFAULT_DUALSENSE}>)
 if(NSL_BUILD_SNS)
     target_link_libraries(nsl_platform PUBLIC nsl_sns)
 endif()

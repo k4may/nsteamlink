@@ -105,6 +105,7 @@ runtime 执行协议 stop/join 并在外部使用归零后回收关闭的 decode
 `make switch-deploy SWITCH_IP=<本次确认的设备地址>`。部署入口固定先构建
 `nsteamlink_nro`，再归档该 NRO 及 SHA 清单并从同一归档推送。CMake 的
 `nsteamlink` 目标只更新 ELF，不能把它作为客户端 NRO 已更新的依据。
+`make switch-dualsense` 构建固定上报 DualSense 的诊断版。手柄类型由构建目标决定。
 
 - CMake ≥ 3.22；Switch 目标使用 `$DEVKITPRO/cmake/Switch.cmake` 工具链文件，
   nro 产出用官方 `nx_create_nro()`，不要手写 elf2nro 调用。

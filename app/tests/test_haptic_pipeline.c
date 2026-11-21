@@ -4,6 +4,7 @@
 #include "hid/device.h"
 #include "hid/manager.h"
 #include "hid/provider.h"
+#include "hid/sdl/src/sdl_hid_common.h"
 #include "ihs_enumeration.h"
 #include "session/session_pri.h"
 #include <SDL.h>
@@ -100,6 +101,32 @@ static unsigned apply(IHS_Session *session, IHS_HIDManagedDevice *device,
     await_output(before);
     return before;
 }
+
+static void check_face_buttons(IHS_Session *session, IHS_HIDManagedDevice *device,
+                               bool dualsense) {
+    const uint8_t labels[] = {SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B,
+                              SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_Y,
+                              SDL_CONTROLLER_BUTTON_START};
+    const uint8_t positions[] = {SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_A,
+                                 SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_X,
+                                 SDL_CONTROLLER_BUTTON_START};
+    IHS_HIDDeviceSDL *sdl = (IHS_HIDDeviceSDL *)device->device;
+    for (unsigned i = 0; i < sizeof(labels); ++i) {
+        SDL_Event event = {.cbutton = {.type = SDL_CONTROLLERBUTTONDOWN, .which = instance,
+                                       .button = labels[i], .state = SDL_PRESSED}};
+        unsigned expected = dualsense ? positions[i] : labels[i];
+        uint8_t wire[IHS_HID_SDL_WIRE_REPORT_MAX];
+        assert(IHS_HIDHandleSDLEvent(session, &event));
+        IHS_HIDReportSDLPackWire(wire, sizeof(wire), &sdl->states.current);
+        assert((wire[16] | ((unsigned)wire[17] << 8)) == (1u << expected));
+        event.cbutton.type = SDL_CONTROLLERBUTTONUP;
+        event.cbutton.state = SDL_RELEASED;
+        assert(IHS_HIDHandleSDLEvent(session, &event));
+        IHS_HIDReportSDLPackWire(wire, sizeof(wire), &sdl->states.current);
+        assert(!wire[16] && !wire[17]);
+    }
+}
+
 int main(void) {
     owner = pthread_self();
     IHS_Init();
@@ -123,14 +150,39 @@ int main(void) {
         .supportsNativeHaptics = sl_rumble_supports_native_haptics};
     IHS_HIDProvider *provider = IHS_HIDProviderSDLCreateUnmanaged(&list, NULL);
     assert(provider);
+    IHS_HIDProviderSDLSetRemoteProfile(provider, IHS_HIDSdlIdentityDualSense, true);
     IHS_SessionHIDAddProvider(session, provider);
     IHS_Enumeration *enumeration = IHS_HIDProviderEnumerateDevices(provider);
     IHS_HIDDeviceInfo descriptor = {0};
+    IHS_HIDProviderDeviceInfo(provider, enumeration, &descriptor);
+    assert(descriptor.vendor_id == 0x054c && descriptor.product_id == 0x0ce6);
+    assert(!strcmp(descriptor.product_string, "DualSense Wireless Controller"));
+    assert(!descriptor.native_haptic_pulse);
+    IHS_EnumerationFree(enumeration);
+    IHS_HIDManagedDevice *sony_device = IHS_HIDManagerOpenDevice(session->hidManager, "sdl://0");
+    assert(sony_device);
+    uint8_t request_caps = 4;
+    IHS_Buffer caps;
+    IHS_BufferInit(&caps, 21, 21);
+    assert(!IHS_HIDDeviceGetFeatureReport(sony_device->device, &request_caps, 1, &caps, 21));
+    assert(caps.size == 21 && caps.data[0] == request_caps &&
+           caps.data[2] == 0 && caps.data[3] == 45 &&
+           caps.data[4] == 0 && caps.data[5] == 0 && caps.data[6] == 0);
+    IHS_BufferClear(&caps, true);
+    check_face_buttons(session, sony_device, true);
+    IHS_SessionDestroy(session);
+
+    IHS_HIDProviderSDLSetRemoteProfile(provider, IHS_HIDSdlIdentityDefault, false);
+    session = IHS_SessionCreate(&config, &info);
+    assert(session);
+    IHS_SessionHIDAddProvider(session, provider);
+    enumeration = IHS_HIDProviderEnumerateDevices(provider);
     IHS_HIDProviderDeviceInfo(provider, enumeration, &descriptor);
     assert(descriptor.native_haptic_pulse);
     IHS_EnumerationFree(enumeration);
     IHS_HIDManagedDevice *device = IHS_HIDManagerOpenDevice(session->hidManager, "sdl://0");
     assert(device);
+    check_face_buttons(session, device, false);
     const uint8_t original[69] = {13, 10, 0, 0, 0, 0x10, 0,
         0, 1, 0x40, 0x40, 0, 0, 5, 0xc0};
     uint8_t wire[69];

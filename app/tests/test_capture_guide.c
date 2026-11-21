@@ -87,6 +87,7 @@ static void settings(void) {
         assert(m.page == SL_SETTINGS); /* Guide source is under Application, not a category. */
         sl_ui_action(&m, SL_OPEN_APP_SETTINGS, 0);
         assert(m.layout.count == 5 && m.layout.controls[3].action == SL_OPEN_GUIDE_KEY);
+        assert(m.layout.controls[4].action == SL_BACK);
         assert(m.layout.controls[3].kind == SL_CONTROL_SUBMENU);
         assert(!strcmp(m.layout.controls[3].label, sl_tr(SL_T_GUIDE_KEY)));
         assert(!strcmp(m.layout.controls[3].value, sl_tr(SL_T_GUIDE_KEY_CAPTURE)));

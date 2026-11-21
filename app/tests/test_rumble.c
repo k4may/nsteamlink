@@ -328,9 +328,9 @@ int main(void) {
     assert(!sl_rumble_configure_ordinary(160,640,1.01f,0));
     assert(!sl_rumble_configure_ordinary(160,640,.75f,4));
     for(unsigned route=0;route<4;++route) {
-        uint64_t reset_before=snapshot().sends;
+        uint64_t refresh_before=snapshot().sends;
         assert(sl_rumble_configure_ordinary(160,640,.75f,route));
-        if(reset_before) await_sends(reset_before+1);
+        if(refresh_before) await_sends(refresh_before+1);
         uint64_t before=snapshot().sends;
         assert(rumble(32768,65535,0)==0);await_sends(before+1);
         pthread_mutex_lock(&capture_lock);
@@ -356,11 +356,10 @@ int main(void) {
     before=snapshot().sends;
     assert(sl_rumble_command(0,absolute_test,69,monotonic_ns(),NULL)==0);await_sends(before+1);
     before=snapshot().sends;
-    assert(sl_rumble_configure_ordinary(100,500,.5f,2));await_sends(before+1);
+    assert(sl_rumble_configure_ordinary(100,500,.5f,2));
     uint32_t relative_hold=UINT32_C(0x40000000) | 24u<<25 | 24u<<20;
     for(unsigned motor=0;motor<2;++motor)for(unsigned byte=0;byte<4;++byte)
         absolute_test[7+motor*4+byte]=(uint8_t)(relative_hold>>(8*byte));
-    before=snapshot().sends;
     assert(sl_rumble_command(0,absolute_test,69,monotonic_ns(),NULL)==0);await_sends(before+1);
     pthread_mutex_lock(&capture_lock);
     for(unsigned side=0;side<2;++side) {

@@ -15,17 +15,18 @@ typedef struct nsl_host_haptics_state {
     uint64_t parent_address, io_address, handle;
     uint64_t native_left_ticks, native_right_ticks, shared_ticks;
     uint32_t native_left_word, native_right_word;
-    uint64_t device_caps, config_caps;
-    uint32_t appid, config_type;
-    uint16_t ordinary_left, ordinary_right;
+    uint64_t device_caps, config_caps, sony_details_caps;
+    uint32_t appid, config_type, controller_type, sony_connection;
+    uint16_t ordinary_left, ordinary_right, sony_firmware;
+    uint8_t sony_trigger_effects[22];
     uint8_t pulse_gate, rumble_gate, config_pulse, config_rumble;
     uint8_t preference_valid, haptics_preference, enhanced;
 } nsl_host_haptics_state;
 
 /* The engine's API-user tree is only one ownership path. A separately found
  * parent must pass the same vtable, IO, device and identity checks. */
-static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context,
-        uint64_t base, uint64_t parent, uint64_t handle, nsl_host_haptics_state *out) {
+static inline int nsl_host_haptics_parent_read_for(nsl_host_read read, void *context,
+        uint64_t base, uint64_t parent, uint64_t handle, bool include_sony, nsl_host_haptics_state *out) {
     uint64_t vt; unsigned matches = 0;
 #define READ(addr, dest) do { if (!read(context, (addr), &(dest), sizeof(dest))) return -1; } while (0)
     READ(parent, vt);
@@ -47,8 +48,8 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         uint32_t type;
         READ(abstraction + 0x98, id);
         READ(abstraction + 8, type);
-        /* handle=0 discovers one unique, valid Switch device in this parent. */
-        if (!id || (handle && id != handle) || type != 38) continue;
+        const bool sony = type == 45 || type == 48;
+        if (!id || (handle && id != handle) || (type != 38 && !(include_sony && sony))) continue;
         uint8_t valid;
         READ(abstraction + 0xb8, valid);
         if (!valid) continue;
@@ -57,22 +58,31 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
         nsl_host_haptics_state value = {0};
         value.slot = slot;
         value.handle = id;
-        READ(abstraction + 0x528, value.native_left_ticks);
-        READ(abstraction + 0x530, value.native_right_ticks);
-        READ(abstraction + 0x538, value.shared_ticks);
-        READ(abstraction + 0x54a, value.native_left_word);
-        READ(abstraction + 0x54e, value.native_right_word);
+        value.controller_type = type;
+        if (sony) {
+            /* Generic initialization and Sony output serializer, §17.2.1. */
+            READ(abstraction + 0x5a8, value.sony_firmware);
+            READ(abstraction + 0x5cf, value.sony_trigger_effects);
+            READ(abstraction + 0x500, value.sony_details_caps);
+            READ(abstraction + 0xd0, value.sony_connection);
+        } else {
+            READ(abstraction + 0x528, value.native_left_ticks);
+            READ(abstraction + 0x530, value.native_right_ticks);
+            READ(abstraction + 0x538, value.shared_ticks);
+            READ(abstraction + 0x54a, value.native_left_word);
+            READ(abstraction + 0x54e, value.native_right_word);
+            READ(abstraction + 0x588, value.enhanced);
+            READ(state + 0x1d1, value.pulse_gate);
+            READ(config + 0x661, value.config_pulse);
+        }
         READ(abstraction + 0x80, value.device_caps);
-        READ(abstraction + 0x588, value.enhanced);
         READ(abstraction + 0x552, value.ordinary_left);
         READ(abstraction + 0x554, value.ordinary_right);
         READ(state + 0x1d0, value.rumble_gate);
-        READ(state + 0x1d1, value.pulse_gate);
         READ(config + 0x240, value.config_caps);
         READ(config + 0x230, value.config_type);
         READ(config + 0x258, value.appid);
         READ(config + 0x660, value.config_rumble);
-        READ(config + 0x661, value.config_pulse);
         READ(parent + slot * 0xe0 + 0x1f0, value.preference_valid);
         /* The original getter tests nonzero; this byte is not restricted to 1. */
         value.preference_valid = value.preference_valid != 0;
@@ -94,12 +104,16 @@ static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context
 #undef READ
 }
 
+static inline int nsl_host_haptics_parent_read(nsl_host_read read, void *context,
+        uint64_t base, uint64_t parent, uint64_t handle, nsl_host_haptics_state *out) {
+    return nsl_host_haptics_parent_read_for(read, context, base, parent, handle, false, out);
+}
+
 /* 1=unique matching local controller, 0=no match, -1=read/layout/inconsistent.
  * Report nothing on an ambiguous match or invalid required field.
  */
-static int nsl_host_haptics_state_read(nsl_host_read read, void *context,
-                                      uint64_t base, uint64_t handle,
-                                      nsl_host_haptics_state *out) {
+static inline int nsl_host_haptics_state_read_for(nsl_host_read read, void *context,
+        uint64_t base, uint64_t handle, bool include_sony, nsl_host_haptics_state *out) {
     uint64_t engine = base + 0x1854550, vt, nodes;
     int32_t root;
 #define READ(addr, dest) do { if (!read(context, (addr), &(dest), sizeof(dest))) return -1; } while (0)
@@ -127,7 +141,7 @@ static int nsl_host_haptics_state_read(nsl_host_read read, void *context,
         READ(node + 0x78, parent);
         if (!parent) continue;
         nsl_host_haptics_state value;
-        int result = nsl_host_haptics_parent_read(read, context, base, parent, handle, &value);
+        int result = nsl_host_haptics_parent_read_for(read, context, base, parent, handle, include_sony, &value);
         if (result < 0) return result;
         if (result == 1) {
             if (matches && out->io_address != value.io_address) return -1;
@@ -136,5 +150,10 @@ static int nsl_host_haptics_state_read(nsl_host_read read, void *context,
     }
     return matches ? 1 : 0;
 #undef READ
+}
+
+static inline int nsl_host_haptics_state_read(nsl_host_read read, void *context,
+        uint64_t base, uint64_t handle, nsl_host_haptics_state *out) {
+    return nsl_host_haptics_state_read_for(read, context, base, handle, false, out);
 }
 #endif

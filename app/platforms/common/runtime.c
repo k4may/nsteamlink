@@ -1866,8 +1866,16 @@ static bool launch_session(sl_runtime *r, IHS_SessionInfo info) {
     IHS_SessionSetVideoCallbacks(r->session, &video_cb, r);
     IHS_SessionSetAudioCallbacks(r->session, sl_media_audio_callbacks(), r);
     IHS_SessionSetInputCallbacks(r->session, &input_cb, r);
-    if (r->provider)
+    if (r->provider) {
+#ifdef __SWITCH__
+        const bool dualsense = NSL_DEFAULT_DUALSENSE;
+        IHS_HIDProviderSDLSetRemoteProfile(r->provider,
+            dualsense ? IHS_HIDSdlIdentityDualSense : IHS_HIDSdlIdentityDefault, dualsense);
+        sl_log(dualsense ? "hid remote profile: DualSense 054c:0ce6, Generic RAW, face=position"
+                        : "hid remote profile: Switch Pro 057e:2009, Generic RAW, face=label");
+#endif
         IHS_SessionHIDAddProvider(r->session, r->provider);
+    }
 #if NSL_HAVE_SNS
     if (r->sns && !IHS_SessionSetDatagramTransport(r->session, sl_sns_datagram_transport(), r->sns))
         return false;
