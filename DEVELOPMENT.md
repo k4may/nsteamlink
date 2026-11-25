@@ -139,7 +139,7 @@ runtime 执行协议 stop/join 并在外部使用归零后回收关闭的 decode
 | SDL Switch rumble thresholds | SDL `a962f40bbba175e9716557a25d5d7965f134a3d3` | zlib | 普通震动量化表的适配；保留 sdl-rumble-LICENSE.txt，并与固定 Valve SDL 原指令对照 | M5 |
 | SDL2_ttf | 系统 2.24.0 / devkitPro `switch-sdl2_ttf` | zlib | 中文与平台共享字体、字形缓存 | M5 |
 | mbedTLS | 系统 2.28 / `switch-mbedtls` | Apache-2.0 | IHSlib 与 Switch SNS 加密后端 | M2 |
-| libopus | 官方1.5.2归档，SHA256固定，fixed-point构建 | BSD-3 | multistream float解码及按帧ID恢复，见协议参考§72 | M4 |
+| libopus | `third_party/opus-1.5.2.tar.gz`，官方归档，SHA256固定，fixed-point构建 | BSD-3 | multistream float解码及按帧ID恢复，见协议参考§72 | M4 |
 | libcurl | 系统 / devkitPro switch-curl 7.69.1-5（libnx SSL） | curl | 封面 HTTPS | M5 |
 | libjpeg-turbo | 系统 / devkitPro 2.1.2-2 | BSD/IJG | 后台 JPEG 解码 | M5 |
 | jsmn | vendored 25647e6 | MIT | 有界商店 JSON 解析 | M5 |

@@ -93,8 +93,9 @@ submodule 工作区逐字节一致。旧 patch 文件已删除，需要查阅时
 
 ## Opus：音频解码
 
-`cmake/Opus.cmake`从[Xiph官方归档](https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz)
-下载未修改源码并核验SHA256，静态链接fixed-point decoder，调用multistream float API。
+`opus-1.5.2.tar.gz`是随仓库保存的未修改[Xiph官方源码归档](https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz)。
+`cmake/Opus.cmake`核验本地归档的SHA256并解包，桌面和Switch构建均可直接使用。
+客户端静态链接fixed-point decoder，调用multistream float API。
 官方客户端的实际恢复分支和定点输出证据见`docs/STEAMLINK_PROTOCOL_RE.md`§72。
 源码在构建目录中，无需全局安装；已有源码缓存可用CMake的
 `FETCHCONTENT_SOURCE_DIR_NSL_OPUS`指定，使用者负责其与固定归档一致。

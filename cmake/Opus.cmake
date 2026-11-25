@@ -6,7 +6,7 @@ if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
 FetchContent_Declare(nsl_opus
-    URL https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+    URL "${CMAKE_CURRENT_LIST_DIR}/../third_party/opus-1.5.2.tar.gz"
     URL_HASH SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1)
 
 function(nsl_add_opus)
