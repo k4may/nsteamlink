@@ -359,6 +359,22 @@ static bool is_silent(const sl_haptic_frame *f) {
     return !f->values[0].amp_low && !f->values[0].amp_high &&
            !f->values[1].amp_low && !f->values[1].amp_high;
 }
+static void apply_channel_frame(sl_haptic_stream *s, const sl_haptic_frame *f, uint64_t now) {
+    bool trigger = f->source == SL_HAPTIC_TRIGGERS;
+    sl_hd_value *values = trigger ? s->triggers : s->body;
+    memcpy(values, f->values, sizeof(f->values));
+    bool active = !is_silent(f) || has_rumble(f->rumble_level);
+    uint64_t expires = active && f->duration_ns ? add(now, f->duration_ns) : 0;
+    uint64_t expiry_source = add(f->source_ns, f->duration_ns);
+    if (trigger) {
+        s->trigger_expires_ns = expires;
+        s->trigger_expiry_source_ns = expiry_source;
+    } else {
+        s->body_rumble = f->rumble_level;
+        s->expires_ns = expires;
+        s->body_expiry_source_ns = expiry_source;
+    }
+}
 static bool stops_component(const sl_hd_value old[2], const sl_haptic_frame *f) {
     for (unsigned i = 0; i < 2; ++i)
         if ((old[i].amp_low && !f->values[i].amp_low) ||
@@ -387,17 +403,7 @@ static bool stop_failed_output(sl_haptic_stream *s, uint64_t now, sl_haptic_fram
             } else *at(s, kept++) = q;
         }
         s->count = kept;
-        memcpy(values, f.values, sizeof(f.values));
-        bool active = !is_silent(&f) || has_rumble(f.rumble_level);
-        uint64_t expires = active && f.duration_ns ? add(now, f.duration_ns) : 0;
-        if (trigger) {
-            s->trigger_expires_ns = expires;
-            s->trigger_expiry_source_ns = add(f.source_ns, f.duration_ns);
-        } else {
-            s->body_rumble = f.rumble_level;
-            s->expires_ns = expires;
-            s->body_expiry_source_ns = add(f.source_ns, f.duration_ns);
-        }
+        apply_channel_frame(s, &f, now);
         if (trigger != failed_trigger) {
             compose(s, &s->current);
             *out = s->current;
@@ -411,6 +417,18 @@ static bool stop_failed_output(sl_haptic_stream *s, uint64_t now, sl_haptic_fram
         *out = f; return true;
     }
     return false;
+}
+static void reset_stale_output(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) {
+    clear_body(s);
+    s->triggers[0] = s->triggers[1] = silence();
+    s->expires_ns = s->trigger_expires_ns = 0;
+    s->current = (sl_haptic_frame){
+        .due_ns = now,
+        .sequence = s->stats.commands,
+        .source = SL_HAPTIC_RESET,
+    };
+    compose(s, &s->current);
+    *out = s->current;
 }
 bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) {
     bool profile_dirty = s->profile_dirty;
@@ -437,12 +455,8 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
             now > add(s->current.source_ns, SL_HAPTIC_MAX_LATENCY_NS);
         if (stale_retry) {
             ++s->stats.stale_frames;
-            clear_body(s);
-            s->triggers[0] = s->triggers[1] = silence();
-            s->expires_ns = s->trigger_expires_ns = 0;
-            s->current = (sl_haptic_frame){.due_ns = now, .source = SL_HAPTIC_RESET,
-                                         .sequence = s->stats.commands};
-            compose(s, &s->current); *out = s->current; return true;
+            reset_stale_output(s, now, out);
+            return true;
         }
         if (s->current.source != SL_HAPTIC_RESET && stop_failed_output(s, now, out)) return true;
         if (!expired || s->current.source == SL_HAPTIC_RESET) { *out = s->current; return true; }
@@ -455,12 +469,8 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
         stale = true;
     }
     if (stale) {
-        clear_body(s);
-        s->triggers[0] = s->triggers[1] = silence();
-        s->expires_ns = s->trigger_expires_ns = 0;
-        s->current = (sl_haptic_frame){.due_ns = now, .source = SL_HAPTIC_RESET,
-                                     .sequence = s->stats.commands};
-        compose(s, &s->current); *out = s->current; return true;
+        reset_stale_output(s, now, out);
+        return true;
     }
     if (expired_at && (!s->count || at(s, 0)->due_ns > now)) {
         sl_haptic_frame f = {.due_ns = expired_at, .source_ns = expired_source,
@@ -485,19 +495,7 @@ bool sl_haptic_advance(sl_haptic_stream *s, uint64_t now, sl_haptic_frame *out) 
         for (unsigned i = 0; i < 2; ++i) s->triggers[i] = silence();
         s->trigger_expires_ns = 0;
     }
-    bool trigger = f.source == SL_HAPTIC_TRIGGERS;
-    sl_hd_value *values = trigger ? s->triggers : s->body;
-    memcpy(values, f.values, sizeof(f.values));
-    bool active = !is_silent(&f) || has_rumble(f.rumble_level);
-    uint64_t expires = active && f.duration_ns ? add(now, f.duration_ns) : 0;
-    if (trigger) {
-        s->trigger_expires_ns = expires;
-        s->trigger_expiry_source_ns = add(f.source_ns, f.duration_ns);
-    } else {
-        s->body_rumble = f.rumble_level;
-        s->expires_ns = expires;
-        s->body_expiry_source_ns = add(f.source_ns, f.duration_ns);
-    }
+    apply_channel_frame(s, &f, now);
     compose(s, &f);
     s->current = f;
     ++s->stats.scheduled_frames;
