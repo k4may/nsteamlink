@@ -65,12 +65,12 @@ int main(void) {
     assert(!strcmp(sl_tr(SL_T_SETTINGS), "设置"));
     sl_i18n_load(dir, "pt_BR.UTF-8");
     assert(sl_i18n_language() == SL_LANG_SYSTEM && sl_i18n_resolved() == SL_LANG_PT_BR);
-    assert(!strcmp(sl_tr(SL_T_SETTINGS), "Configurações"));
+    assert(!strcmp(sl_tr(SL_T_SETTINGS), "Ajustes"));
     sl_i18n_load(dir, "de_DE");
     assert(!strcmp(sl_tr(SL_T_SETTINGS), "Settings"));
     assert(sl_i18n_save(dir, SL_LANG_PT_BR));
     sl_i18n_load(dir, "en_US");
-    assert(sl_i18n_language() == SL_LANG_PT_BR && !strcmp(sl_tr(SL_T_SETTINGS), "Configurações"));
+    assert(sl_i18n_language() == SL_LANG_PT_BR && !strcmp(sl_tr(SL_T_SETTINGS), "Ajustes"));
     assert(sl_i18n_save(dir, SL_LANG_SYSTEM));
     sl_i18n_load(dir, "de_DE");
     sl_ui_connected(&m);
