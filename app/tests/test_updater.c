@@ -18,11 +18,11 @@ int __wrap_rename(const char *from, const char *to) {
     return __real_rename(from, to);
 }
 
-#define DL          "https://github.com/kxn/nsteamlink/releases/download/v0.2.2/"
+#define DL          "https://github.com/k4may/nsteamlink/releases/download/v0.2.2/"
 #define PAYLOAD     "NRO payload v0.2.2\n"
 #define PAYLOAD_SHA "6c6824fbc5e4bfad2461fd0205b76e7f52805a71dfec72eb4edd8f48d48b0862"
 static const char release_json[] =
-    "{\"url\":\"https://api.github.com/repos/kxn/nsteamlink/releases/1\",\"tag_name\":\"v0.2.2\","
+    "{\"url\":\"https://api.github.com/repos/k4may/nsteamlink/releases/1\",\"tag_name\":\"v0.2.2\","
     "\"name\":\"NSteamLink v0.2.2\",\"draft\":false,\"prerelease\":false,"
     "\"body\":\"# NSteamLink v0.2.2\\n\\n\\u4e2d\\u6587 \\\"quoted\\\" {not: json}\","
     "\"assets\":[{\"name\":\"build_identity.json\",\"size\":137,\"browser_download_url\":\"" DL

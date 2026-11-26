@@ -5,7 +5,7 @@
 
 /* Self-update from the project's GitHub releases (D-060). Only the release
  * NRO listed in the release's SHA256SUMS is ever installed. */
-#define SL_UPDATE_REPOSITORY  "kxn/nsteamlink"
+#define SL_UPDATE_REPOSITORY  "k4may/nsteamlink"
 #define SL_UPDATE_API         "https://api.github.com/repos/" SL_UPDATE_REPOSITORY "/releases/latest"
 #define SL_UPDATE_DOWNLOADS   "https://github.com/" SL_UPDATE_REPOSITORY "/releases/download/"
 #define SL_UPDATE_MAX_TARGETS 2
