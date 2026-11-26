@@ -752,7 +752,8 @@ int main(int argc, char **argv) {
     sl_ui_renderer_destroy(renderer);
     stream_media_shutdown();
     const char *settings_files[] = {"profile.bin", "streaming_settings.bin", "language.conf",
-                                    "update.conf", "video.conf", "special.conf"};
+                                    "update.conf", "video.conf", "special.conf",
+                                    "input.conf"};
     for (size_t i = 0; i < sizeof(settings_files) / sizeof(settings_files[0]); ++i) {
         snprintf(blocked_temp, sizeof(blocked_temp), "%s/%s", dir, settings_files[i]);
         assert(!unlink(blocked_temp));
