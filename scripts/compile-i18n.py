@@ -21,7 +21,7 @@ def formats(text):
 
 def compile_catalogs(source, output):
     catalogs = [json.loads((source / f'{lang}.json').read_text(), object_pairs_hook=unique)
-                for lang in ('zh-CN', 'en')]
+                for lang in ('zh-CN', 'en', 'pt-BR')]
     keys = sorted(catalogs[0])
     for catalog in catalogs:
         if set(catalog) != set(keys):
@@ -39,7 +39,7 @@ def compile_catalogs(source, output):
     (output / 'i18n_keys.h').write_text('#pragma once\ntypedef enum sl_text_id {\n' +
         ''.join(f'    SL_T_{key},\n' for key in keys) + '    SL_T_COUNT\n} sl_text_id;\n')
     (output / 'i18n_data.h').write_text('/* Generated from app/resources/i18n. Do not edit. */\n' +
-        'static const char *const translations[2][SL_T_COUNT] = {\n' +
+        'static const char *const translations[3][SL_T_COUNT] = {\n' +
         ',\n'.join('{\n' + ''.join(f'    [SL_T_{key}] = {json.dumps(c[key], ensure_ascii=False)},\n'
                                     for key in keys) + '}' for c in catalogs) + '\n};\n')
 

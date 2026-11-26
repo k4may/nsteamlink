@@ -22,7 +22,7 @@ Pick up your Joy-Con, choose a PC, and return to your last game.
 - **Full-screen play** — Joy-Con rumble and an on-demand menu that stays out of the way.
 - **Gyro input** — send Switch motion sensors to Steam Input. Configure gyro as a mouse in Steam's desktop controller layout to move the pointer by rotating the Switch.
 - **End games remotely** — disconnect while leaving the game running, or ask the PC to quit it.
-- **Make it yours** — English and Chinese, picture preferences and UI sounds.
+- **Make it yours** — English, Chinese and Brazilian Portuguese, picture preferences and UI sounds.
 - **Launch from HOME** — add a shortcut from the app's options.
 - **Stay up to date** — on start, the app offers new releases and installs the NRO for you.
 
@@ -54,6 +54,10 @@ Use **Y to open Steam** on your first visit. Games played during streaming appea
 | Back / exit | B |
 | Open the streaming menu | Hold **− and + together for 0.8 seconds** |
 | Send Steam Guide during streaming | Short-press Capture; disable under Settings → Application → Steam Guide key |
+
+Face buttons reach Steam by letter. To send them by position instead, turn on
+**Settings → Application → Swap A/B and X/Y**. Only the input sent to the PC changes;
+menus on the Switch keep A to confirm and B to go back.
 
 The home screen and menus also support touch. **Disconnect** leaves the PC game running.
 **End game and disconnect** asks the host to quit the game, then disconnects. The streaming menu only offers Resume, End game and disconnect, and Disconnect; settings are available from the home screen.

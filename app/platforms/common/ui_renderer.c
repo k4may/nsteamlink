@@ -362,7 +362,8 @@ static int centered_y(sl_ui_renderer *r, const char *s, int size, int y, int hei
     return y + (height - (bottom - top)) / 2 - size - top;
 }
 static const char *localized_title(sl_ui_renderer *r, uint64_t id, const char *fallback) {
-    int language = sl_i18n_resolved(), slot = -1;
+    /* Store titles are cached for the zh-CN and en catalogs only. */
+    int language = sl_i18n_resolved() == SL_LANG_ZH_CN ? SL_LANG_ZH_CN : SL_LANG_EN, slot = -1;
     for (int i = 0; i < 16; ++i)
         if (r->titles[i].id == id && r->titles[i].language == language) {
             slot = i;
@@ -1052,6 +1053,7 @@ static void draw_scene(sl_ui_renderer *r, const sl_ui_model *m, const sl_debug_s
             if (c->kind == SL_CONTROL_TOGGLE) {
                 bool enabled = c->action == SL_FEC            ? m->store.unreliable_fec
                                : c->action == SL_UPDATE_CHECK ? m->update_check
+                               : c->action == SL_SWAP_BUTTONS ? m->swap_buttons
                                                               : m->store.sound;
                 sl_gfx_color track = enabled ? green : muted;
                 int tx = box.x + box.w - 74, ty = box.y + (box.h - 28) / 2;

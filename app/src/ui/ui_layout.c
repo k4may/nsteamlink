@@ -36,6 +36,7 @@ static sl_control_kind control_kind(sl_action action) {
     case SL_SOUND:
     case SL_FEC:
     case SL_UPDATE_CHECK:
+    case SL_SWAP_BUTTONS:
         return SL_CONTROL_TOGGLE;
     case SL_SET_QUALITY:
     case SL_SET_RESOLUTION:
@@ -316,14 +317,16 @@ void sl_ui_layout(sl_ui_model *m) {
         case SL_APP_SETTINGS:
             strcpy(l->title, sl_tr(SL_T_APP_SETTINGS));
             value_row(l, 0, sl_tr(SL_T_LANGUAGE), SL_OPEN_LANGUAGE,
-                      sl_tr(sl_i18n_language() == SL_LANG_ZH_CN ? SL_T_CHINESE
-                            : sl_i18n_language() == SL_LANG_EN  ? SL_T_ENGLISH
-                                                                : SL_T_SYSTEM_LANGUAGE));
+                      sl_tr(sl_i18n_language() == SL_LANG_ZH_CN   ? SL_T_CHINESE
+                            : sl_i18n_language() == SL_LANG_EN    ? SL_T_ENGLISH
+                            : sl_i18n_language() == SL_LANG_PT_BR ? SL_T_PORTUGUESE
+                                                                  : SL_T_SYSTEM_LANGUAGE));
             row(l, 1, sl_tr(SL_T_UPDATE_CHECK), SL_UPDATE_CHECK, 0);
             row(l, 2, sl_tr(SL_T_SHORTCUT), SL_OPEN_SHORTCUT, 0);
             value_row(l, 3, sl_tr(SL_T_GUIDE_KEY), SL_OPEN_GUIDE_KEY,
                       sl_tr(m->guide_key == SL_GUIDE_KEY_CAPTURE ? SL_T_GUIDE_KEY_CAPTURE
                                                                : SL_T_GUIDE_KEY_OFF));
+            row(l, 4, sl_tr(SL_T_SWAP_BUTTONS), SL_SWAP_BUTTONS, 0);
             break;
         case SL_GUIDE_KEY:
             strcpy(l->title, sl_tr(SL_T_GUIDE_KEY));
@@ -335,6 +338,7 @@ void sl_ui_layout(sl_ui_model *m) {
             row(l, 0, sl_tr(SL_T_SYSTEM_LANGUAGE), SL_SET_LANGUAGE, SL_LANG_SYSTEM);
             row(l, 1, sl_tr(SL_T_CHINESE), SL_SET_LANGUAGE, SL_LANG_ZH_CN);
             row(l, 2, sl_tr(SL_T_ENGLISH), SL_SET_LANGUAGE, SL_LANG_EN);
+            row(l, 3, sl_tr(SL_T_PORTUGUESE), SL_SET_LANGUAGE, SL_LANG_PT_BR);
             break;
         case SL_BANDWIDTH:
             if (!sl_bitrate_valid(m->store.bitrate_kbps)) {

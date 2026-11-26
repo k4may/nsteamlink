@@ -8,15 +8,20 @@ compiler = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compiler)
 with tempfile.TemporaryDirectory() as tmp:
     source = Path(tmp)
-    for invalid in ({'TITLE': '%s'}, {'TITLE': '%n'}, {'OTHER': '%d'}, {'TITLE': ''}):
-        (source / 'zh-CN.json').write_text(json.dumps({'TITLE': '%d'}))
-        (source / 'en.json').write_text(json.dumps(invalid))
-        try:
-            compiler.compile_catalogs(source, source / 'out')
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f'invalid translation accepted: {invalid}')
+    valid = json.dumps({'TITLE': '%d'})
+    for catalog in ('en.json', 'pt-BR.json'):
+        for invalid in ({'TITLE': '%s'}, {'TITLE': '%n'}, {'OTHER': '%d'}, {'TITLE': ''}):
+            for name in ('zh-CN.json', 'en.json', 'pt-BR.json'):
+                (source / name).write_text(valid)
+            (source / catalog).write_text(json.dumps(invalid))
+            try:
+                compiler.compile_catalogs(source, source / 'out')
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'invalid {catalog} translation accepted: {invalid}')
+    for name in ('zh-CN.json', 'pt-BR.json'):
+        (source / name).write_text(valid)
     (source / 'en.json').write_text('{"TITLE":"%d", "TITLE":"%d"}')
     try:
         compiler.compile_catalogs(source, source / 'out')

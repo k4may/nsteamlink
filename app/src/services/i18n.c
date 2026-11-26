@@ -12,8 +12,12 @@ sl_language sl_i18n_resolved(void) {
     int language = atomic_load(&preferred);
     return language == SL_LANG_SYSTEM ? atomic_load(&system_language) : language;
 }
+/* Catalog order follows scripts/compile-i18n.py: zh-CN, en, pt-BR. */
+static int catalog(sl_language language) {
+    return language == SL_LANG_EN ? 1 : language == SL_LANG_PT_BR ? 2 : 0;
+}
 const char *sl_tr(sl_text_id id) {
-    return id >= 0 && id < SL_T_COUNT ? translations[sl_i18n_resolved() == SL_LANG_EN][id] : "";
+    return id >= 0 && id < SL_T_COUNT ? translations[catalog(sl_i18n_resolved())][id] : "";
 }
 sl_language sl_i18n_language(void) {
     return atomic_load(&preferred);
@@ -22,10 +26,11 @@ void sl_i18n_set(sl_language language) {
     if (language >= 0 && language < SL_LANG_COUNT)
         atomic_store(&preferred, language);
 }
-static const char *codes[] = {"system", "zh-CN", "en"};
+static const char *codes[] = {"system", "zh-CN", "en", "pt-BR"};
 void sl_i18n_load(const char *dir, const char *locale) {
-    atomic_store(&system_language,
-                 locale && !strncmp(locale, "zh", 2) ? SL_LANG_ZH_CN : SL_LANG_EN);
+    atomic_store(&system_language, locale && !strncmp(locale, "zh", 2)   ? SL_LANG_ZH_CN
+                                   : locale && !strncmp(locale, "pt", 2) ? SL_LANG_PT_BR
+                                                                         : SL_LANG_EN);
     sl_i18n_set(SL_LANG_SYSTEM);
     char path[512], value[32];
     snprintf(path, sizeof(path), "%s/language.conf", dir);

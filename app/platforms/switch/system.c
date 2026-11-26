@@ -148,6 +148,8 @@ const char *sl_system_locale(void) {
     if (R_SUCCEEDED(result) && (language == SetLanguage_ZHCN || language == SetLanguage_ZHTW ||
                                 language == SetLanguage_ZHHANS || language == SetLanguage_ZHHANT))
         return "zh-CN";
+    if (R_SUCCEEDED(result) && (language == SetLanguage_PTBR || language == SetLanguage_PT))
+        return "pt-BR";
     return "en";
 }
 

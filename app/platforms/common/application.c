@@ -13,6 +13,7 @@
 #include "services/update_config.h"
 #include "stream_settings.h"
 #include "services/special_settings.h"
+#include "services/input_settings.h"
 #include "ui/ui_events.h"
 #include "ui_audio.h"
 #include "updater.h"
@@ -306,6 +307,7 @@ int sl_application_run(int argc, char **argv) {
     a->ui.update_check = sl_update_config_load(sl_system_data_dir());
     sl_update_ignored_load(sl_system_data_dir(), a->ui.ignored_update_version);
     a->ui.guide_key = sl_special_settings_load(sl_system_data_dir());
+    a->ui.swap_buttons = sl_input_settings_load(sl_system_data_dir());
     sl_log_start();
     if (!offline)
         a->artwork = sl_artwork_create(sl_system_data_dir(), NULL, NULL);
@@ -399,6 +401,7 @@ int sl_application_run(int argc, char **argv) {
         sl_media_gate(sl_app_allow_remote(&a->lifecycle, sl_ui_remote(&a->ui)) &&
                       sl_gfx_healthy(sl_media_gfx()));
         sl_media_capture_guide(a->ui.guide_key == SL_GUIDE_KEY_CAPTURE && sl_ui_remote(&a->ui));
+        sl_media_swap_buttons(a->ui.swap_buttons);
         sl_media_mute(!a->ui.store.sound);
         sl_command cmd;
         if (sl_ui_take_command(&a->ui, &cmd)) {
@@ -409,7 +412,8 @@ int sl_application_run(int argc, char **argv) {
                 if (!sl_i18n_save(sl_system_data_dir(), cmd.language) ||
                     !sl_update_config_save(sl_system_data_dir(), cmd.update_check) ||
                     !sl_video_settings_save(sl_system_data_dir(), cmd.resolution) ||
-                    !sl_special_settings_save(sl_system_data_dir(), cmd.guide_key))
+                    !sl_special_settings_save(sl_system_data_dir(), cmd.guide_key) ||
+                    !sl_input_settings_save(sl_system_data_dir(), cmd.swap_buttons))
                     sl_ui_error(&a->ui, sl_tr(SL_T_SAVE_SETTINGS_FAILED));
             } else if (cmd.type == SL_CMD_CANCEL || cmd.type == SL_CMD_STOP ||
                        cmd.type == SL_CMD_END_GAME)

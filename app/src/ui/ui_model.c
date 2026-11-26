@@ -218,6 +218,7 @@ static void emit(sl_ui_model *m, sl_command_type type) {
     m->command.language = sl_i18n_language();
     m->command.update_check = m->update_check;
     m->command.guide_key = m->guide_key;
+    m->command.swap_buttons = m->swap_buttons;
 }
 static void start(sl_ui_model *m, int game, bool test_only) {
     sl_host *h = selected(m);
@@ -529,6 +530,12 @@ static void action(sl_ui_model *m, sl_action a, int arg) {
             emit(m, SL_CMD_SAVE);
         }
         break;
+    case SL_SWAP_BUTTONS:
+        if (m->page == SL_APP_SETTINGS && !m->streaming) {
+            m->swap_buttons = !m->swap_buttons;
+            emit(m, SL_CMD_SAVE);
+        }
+        break;
     case SL_CONFIRM_UPDATE:
         if ((m->page == SL_UPDATE || (m->page == SL_UPDATE_RESULT && !m->update_succeeded)) &&
             !m->streaming) {
@@ -667,6 +674,7 @@ void sl_ui_action(sl_ui_model *m, sl_action a, int arg) {
     bool fec = m->store.unreliable_fec, update_check = m->update_check;
     bool skip_update = m->skip_update;
     sl_guide_key guide_key = m->guide_key;
+    bool swap_buttons = m->swap_buttons;
     sl_language language = sl_i18n_language();
     char input[64];
     memcpy(input, m->input, sizeof(input));
@@ -677,7 +685,7 @@ void sl_ui_action(sl_ui_model *m, sl_action a, int arg) {
                                                                            : SL_CUE_CONFIRM;
     else if (sound != m->store.sound || fec != m->store.unreliable_fec ||
              update_check != m->update_check || skip_update != m->skip_update ||
-             guide_key != m->guide_key ||
+             guide_key != m->guide_key || swap_buttons != m->swap_buttons ||
              quality != m->store.quality ||
              language != sl_i18n_language())
         cue = SL_CUE_TOGGLE;

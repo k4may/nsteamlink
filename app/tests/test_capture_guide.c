@@ -1,4 +1,5 @@
 #include "input/guide_pulse.h"
+#include "services/input_settings.h"
 #include "services/special_settings.h"
 #include "ui/ui_events.h"
 #include <assert.h>
@@ -75,7 +76,7 @@ static void storage(void) {
     assert(!unlink(path) && !rmdir(dir));
 }
 static void settings(void) {
-    for (unsigned language = SL_LANG_ZH_CN; language <= SL_LANG_EN; ++language) {
+    for (unsigned language = SL_LANG_ZH_CN; language < SL_LANG_COUNT; ++language) {
         sl_i18n_set(language);
         sl_ui_model m;
         sl_ui_init(&m, &(sl_auth_store){0});
@@ -86,12 +87,15 @@ static void settings(void) {
         sl_ui_action(&m, SL_OPEN_GUIDE_KEY, 0);
         assert(m.page == SL_SETTINGS); /* Guide source is under Application, not a category. */
         sl_ui_action(&m, SL_OPEN_APP_SETTINGS, 0);
-        assert(m.layout.count == 5 && m.layout.controls[3].action == SL_OPEN_GUIDE_KEY);
-        assert(m.layout.controls[4].action == SL_BACK);
+        assert(m.layout.count == 6 && m.layout.controls[3].action == SL_OPEN_GUIDE_KEY);
+        assert(m.layout.controls[4].action == SL_SWAP_BUTTONS);
+        assert(m.layout.controls[4].kind == SL_CONTROL_TOGGLE);
+        assert(m.layout.controls[5].action == SL_BACK);
         assert(m.layout.controls[3].kind == SL_CONTROL_SUBMENU);
         assert(!strcmp(m.layout.controls[3].label, sl_tr(SL_T_GUIDE_KEY)));
         assert(!strcmp(m.layout.controls[3].value, sl_tr(SL_T_GUIDE_KEY_CAPTURE)));
         assert(m.layout.controls[3].y + m.layout.controls[3].h <= m.layout.controls[4].y);
+        assert(m.layout.controls[4].y + m.layout.controls[4].h <= m.layout.controls[5].y);
         sl_ui_activate(&m, m.layout.controls[3].id);
         assert(m.page == SL_GUIDE_KEY && m.layout.drawer && m.layout.count == 3 && m.focus == 101);
         assert(!strcmp(m.layout.title, sl_tr(SL_T_GUIDE_KEY)));
@@ -124,6 +128,49 @@ static void settings(void) {
         sl_ui_action(&m, SL_SET_GUIDE_KEY, SL_GUIDE_KEY_OFF);
         assert(m.guide_key == SL_GUIDE_KEY_CAPTURE && !m.command.type);
     }
+}
+static void swap_buttons(void) {
+    char dir[] = "/tmp/nsl-input-XXXXXX", path[512], backup[512];
+    assert(mkdtemp(dir));
+    snprintf(path, sizeof(path), "%s/input.conf", dir);
+    snprintf(backup, sizeof(backup), "%s/input.bak", dir);
+    assert(!sl_input_settings_load(dir)); /* Default keeps the letter-for-letter mapping. */
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        no_replace = pass != 0; /* Horizon rename cannot replace an existing file. */
+        assert(sl_input_settings_save(dir, true) && sl_input_settings_load(dir));
+        assert(sl_input_settings_save(dir, false) && !sl_input_settings_load(dir));
+    }
+    no_replace = false;
+    assert(sl_input_settings_save(dir, true) && !rename(path, backup));
+    assert(sl_input_settings_load(dir)); /* An interrupted replace recovers from the backup. */
+    assert(!unlink(backup));
+    const char *invalid[] = {"", "version=1\nswap_buttons=2\n", "version=2\nswap_buttons=1\n",
+                             "version=1\nswap_buttons=1\ntrailing"};
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        write_setting(path, invalid[i]);
+        assert(!sl_input_settings_load(dir));
+    }
+    assert(!unlink(path) && !rmdir(dir));
+
+    sl_i18n_set(SL_LANG_EN);
+    sl_ui_model m;
+    sl_ui_init(&m, &(sl_auth_store){0});
+    assert(!m.swap_buttons);
+    sl_ui_action(&m, SL_SWAP_BUTTONS, 0);
+    assert(!m.swap_buttons && !m.command.type); /* Only from the Application page. */
+    sl_ui_action(&m, SL_OPEN_SETTINGS, 0);
+    sl_ui_action(&m, SL_OPEN_APP_SETTINGS, 0);
+    assert(!strcmp(m.layout.controls[4].label, sl_tr(SL_T_SWAP_BUTTONS)));
+    sl_ui_activate(&m, m.layout.controls[4].id);
+    sl_command c;
+    assert(m.swap_buttons && m.page == SL_APP_SETTINGS && sl_ui_take_command(&m, &c) &&
+           c.type == SL_CMD_SAVE && c.swap_buttons);
+    sl_runtime_event activity = {.type = SL_EVENT_ACTIVITY, .generation = m.generation};
+    sl_ui_runtime_event(&m, &activity);
+    assert(sl_ui_take_command(&m, &c) && c.swap_buttons); /* Activity saves keep the choice. */
+    sl_ui_connected(&m);
+    sl_ui_action(&m, SL_SWAP_BUTTONS, 0);
+    assert(m.swap_buttons && !m.command.type); /* Never changes while a press may be held. */
 }
 typedef struct { unsigned calls, downs, ups; bool accept; } sink;
 static bool submit(void *context, bool down) {
@@ -160,6 +207,7 @@ static void pulses(void) {
 int main(void) {
     storage();
     settings();
+    swap_buttons();
     pulses();
     puts("PASS Guide source v1/v2 migration, OFF persistence, Application radio selection, and admitted pulses");
 }

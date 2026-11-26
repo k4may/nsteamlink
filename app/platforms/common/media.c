@@ -2078,6 +2078,28 @@ void sl_media_neutral(void *context) {
     neutral_locked();
     pthread_mutex_unlock(&state_lock);
 }
+/* Main input owner. Settings only change outside streaming, so a press and its
+ * release always use the same mapping. The local UI never sees the swap. */
+static atomic_bool swap_face_buttons;
+void sl_media_swap_buttons(bool enabled) {
+    atomic_store(&swap_face_buttons, enabled);
+}
+static int game_button(int code) {
+    if (!atomic_load(&swap_face_buttons))
+        return code;
+    switch (code) {
+    case SDL_CONTROLLER_BUTTON_A:
+        return SDL_CONTROLLER_BUTTON_B;
+    case SDL_CONTROLLER_BUTTON_B:
+        return SDL_CONTROLLER_BUTTON_A;
+    case SDL_CONTROLLER_BUTTON_X:
+        return SDL_CONTROLLER_BUTTON_Y;
+    case SDL_CONTROLLER_BUTTON_Y:
+        return SDL_CONTROLLER_BUTTON_X;
+    default:
+        return code;
+    }
+}
 void sl_media_input(const sl_input_event *e, void *context) {
     (void)context;
     pthread_mutex_lock(&state_lock);
@@ -2128,7 +2150,7 @@ void sl_media_input(const sl_input_event *e, void *context) {
         if (e->type == SL_BUTTON) {
             event.type = e->value ? SDL_CONTROLLERBUTTONDOWN : SDL_CONTROLLERBUTTONUP;
             event.cbutton.which = hid_controller_id;
-            event.cbutton.button = e->code;
+            event.cbutton.button = game_button(e->code);
             event.cbutton.state = e->value ? SDL_PRESSED : SDL_RELEASED;
         }
         if (e->type == SL_AXIS) {

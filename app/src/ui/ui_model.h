@@ -89,6 +89,7 @@ typedef enum sl_action {
     SL_FEC,
     SL_RETRY,
     SL_UPDATE_CHECK,
+    SL_SWAP_BUTTONS,
     SL_SET_GUIDE_KEY,
     SL_CONFIRM_UPDATE,
     SL_SKIP_UPDATE,
@@ -126,6 +127,7 @@ typedef struct sl_command {
     sl_language language;
     bool update_check;
     sl_guide_key guide_key;
+    bool swap_buttons;
     char text[64];
 } sl_command;
 typedef enum sl_control_kind {
@@ -218,6 +220,7 @@ typedef struct sl_ui_model {
     bool update_check, update_offered, update_succeeded;
     bool skip_update; /* Pending checkbox; persisted only by the confirm action. */
     sl_guide_key guide_key;
+    bool swap_buttons; /* Streamed game input only; the local UI keeps A confirm / B back. */
     char update_version[16];
     char ignored_update_version[16];
     sl_layout layout;

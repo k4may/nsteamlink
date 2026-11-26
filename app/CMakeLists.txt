@@ -4,7 +4,7 @@ add_custom_command(OUTPUT "${NSL_I18N_DIR}/i18n_keys.h" "${NSL_I18N_DIR}/i18n_da
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/compile-i18n.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/i18n" "${NSL_I18N_DIR}"
     DEPENDS "${CMAKE_SOURCE_DIR}/scripts/compile-i18n.py"
-        resources/i18n/zh-CN.json resources/i18n/en.json VERBATIM)
+        resources/i18n/zh-CN.json resources/i18n/en.json resources/i18n/pt-BR.json VERBATIM)
 add_custom_target(nsl_i18n DEPENDS "${NSL_I18N_DIR}/i18n_keys.h" "${NSL_I18N_DIR}/i18n_data.h")
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
@@ -166,6 +166,7 @@ target_link_libraries(nsl_updater PUBLIC nsl_ui nsl_remote PkgConfig::CURL ${MBE
 add_library(nsl_ui STATIC src/ui/ui_model.c src/ui/ui_layout.c src/ui/ui_events.c src/input/input_router.c
     src/services/host_registry.c src/services/auth_store.c src/services/host_key_store.c src/services/i18n.c
     src/services/update_config.c src/services/video_settings.c src/services/special_settings.c
+    src/services/input_settings.c
     src/input/guide_pulse.c)
 target_include_directories(nsl_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(nsl_ui PRIVATE -Wall -Wextra)
