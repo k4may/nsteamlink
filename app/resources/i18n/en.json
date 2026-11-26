@@ -110,6 +110,7 @@
   "SYSTEM_LANGUAGE": "System default",
   "CHINESE": "简体中文",
   "ENGLISH": "English",
+  "PORTUGUESE": "Português (Brasil)",
   "BRAND": "NSteamLink",
   "PROJECT_URL": "http://github.com/kxn/nsteamlink",
   "APP_TITLE": "NSteamLink  http://github.com/kxn/nsteamlink  v%s",
@@ -187,5 +188,6 @@
   "END_GAME_CONFIRM": "End game",
   "GUIDE_KEY": "Steam Guide button",
   "GUIDE_KEY_OFF": "Off",
-  "GUIDE_KEY_CAPTURE": "Capture button"
+  "GUIDE_KEY_CAPTURE": "Capture button",
+  "SWAP_BUTTONS": "Swap A/B and X/Y"
 }

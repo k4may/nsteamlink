@@ -30,6 +30,7 @@
 #include "services/update_config.h"
 #include "stream_settings.h"
 #include "services/special_settings.h"
+#include "services/input_settings.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -82,6 +83,7 @@ struct sl_runtime {
     sl_language save_language;
     bool save_update_check;
     sl_guide_key save_guide_key;
+    bool save_swap_buttons;
     sl_resolution resolution, save_resolution;
     sl_stream_request_limits stream_limits; /* Frozen from ticket through negotiation. */
     sl_command pending, active;
@@ -2487,6 +2489,7 @@ static void *worker_main(void *ctx) {
         sl_language save_language;
         bool save_update_check;
         sl_guide_key save_guide_key;
+        bool save_swap_buttons;
         sl_resolution save_resolution;
         pthread_mutex_lock(&r->lock);
         if (r->request_pending) {
@@ -2497,6 +2500,7 @@ static void *worker_main(void *ctx) {
         save_language = r->save_language;
         save_update_check = r->save_update_check;
         save_guide_key = r->save_guide_key;
+        save_swap_buttons = r->save_swap_buttons;
         save_resolution = r->save_resolution;
         snapshot_pending = r->snapshot_pending;
         if (snapshot_pending) {
@@ -2567,7 +2571,9 @@ static void *worker_main(void *ctx) {
             bool update_saved = sl_update_config_save(sl_system_data_dir(), save_update_check);
             bool video_saved = sl_video_settings_save(sl_system_data_dir(), save_resolution);
             bool special_saved = sl_special_settings_save(sl_system_data_dir(), save_guide_key);
-            if (!profile_saved || !language_saved || !update_saved || !video_saved || !special_saved)
+            bool input_saved = sl_input_settings_save(sl_system_data_dir(), save_swap_buttons);
+            if (!profile_saved || !language_saved || !update_saved || !video_saved ||
+                !special_saved || !input_saved)
                 fail(r, sl_tr(SL_T_SAVE_SETTINGS_FAILED));
         }
         if (cmd.type) {
@@ -2891,6 +2897,7 @@ bool sl_runtime_submit(sl_runtime *r, const sl_command *cmd, const sl_auth_store
         r->save_language = cmd->language;
         r->save_update_check = cmd->update_check;
         r->save_guide_key = cmd->guide_key;
+        r->save_swap_buttons = cmd->swap_buttons;
         r->save_resolution = cmd->resolution;
     } else {
         if (r->request_pending && cmd->type != SL_CMD_EXIT && cmd->type != SL_CMD_CANCEL &&

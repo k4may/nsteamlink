@@ -185,6 +185,8 @@ void sl_media_hooks(void (*draw)(void *, void *), void (*event)(const void *, vo
 void sl_media_gate(bool enabled);
 /* Main input owner: update interception and drive an admitted Guide pulse. */
 void sl_media_capture_guide(bool enabled);
+/* Main input owner: exchange A/B and X/Y in streamed game input only. */
+void sl_media_swap_buttons(bool enabled);
 void sl_media_input(const sl_input_event *event, void *context);
 void sl_media_neutral(void *context);
 void sl_media_mute(bool mute);

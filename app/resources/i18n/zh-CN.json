@@ -110,6 +110,7 @@
   "SYSTEM_LANGUAGE": "跟随系统",
   "CHINESE": "简体中文",
   "ENGLISH": "English",
+  "PORTUGUESE": "Português (Brasil)",
   "BRAND": "NSteamLink",
   "PROJECT_URL": "http://github.com/kxn/nsteamlink",
   "APP_TITLE": "NSteamLink  http://github.com/kxn/nsteamlink  v%s",
@@ -187,5 +188,6 @@
   "END_GAME_CONFIRM": "结束并断开",
   "GUIDE_KEY": "Steam Guide 键",
   "GUIDE_KEY_OFF": "关闭",
-  "GUIDE_KEY_CAPTURE": "截图键"
+  "GUIDE_KEY_CAPTURE": "截图键",
+  "SWAP_BUTTONS": "交换 A/B 与 X/Y"
 }

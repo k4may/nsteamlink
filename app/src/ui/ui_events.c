@@ -188,7 +188,8 @@ void sl_ui_runtime_event(sl_ui_model *m, const sl_runtime_event *event) {
                                       .language = sl_i18n_language(),
                                       .resolution = m->resolution,
                                       .update_check = m->update_check,
-                                      .guide_key = m->guide_key};
+                                      .guide_key = m->guide_key,
+                                      .swap_buttons = m->swap_buttons};
         break;
     }
     case SL_EVENT_CLOSED:

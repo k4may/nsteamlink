@@ -791,6 +791,7 @@ static void actionable_settings(void) {
                                  SL_SOUND,
                                  SL_FEC,
                                  SL_UPDATE_CHECK,
+                                 SL_SWAP_BUTTONS,
                                  SL_RUN_NETWORK_TEST};
     for (unsigned i = 0; i < sizeof(blocked) / sizeof(blocked[0]); ++i) {
         sl_ui_action(&m, blocked[i], 0);
